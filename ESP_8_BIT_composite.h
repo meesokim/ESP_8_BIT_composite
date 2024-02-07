@@ -57,6 +57,7 @@ SOFTWARE.
 #include "soc/rtc.h"
 #include "soc/rtc_io_reg.h"
 #include "soc/soc.h"
+#include "hal/dac_hal.h"
 
 class ESP_8_BIT_composite
 {
