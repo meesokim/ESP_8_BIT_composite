@@ -36,7 +36,7 @@ lldesc_t _dma_desc[4] = {0};
 intr_handle_t _isr_handle;
 
 extern "C"
-void IRAM_ATTR video_isr(volatile void* buf);
+void IRAM_ATTR video_isr(const volatile void* buf);
 
 // simple isr
 void IRAM_ATTR i2s_intr_handler_video(void *arg)
@@ -582,7 +582,7 @@ void video_sync()
 
 // Workhorse ISR handles audio and video updates
 extern "C"
-void IRAM_ATTR video_isr(volatile void* vbuf)
+void IRAM_ATTR video_isr(const volatile void* vbuf)
 {
     if (!_lines)
         return;
