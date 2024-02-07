@@ -110,11 +110,19 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     I2S0.clkm_conf.clkm_div_b = 0;              // Fractional clock divider’s numerator value.
     I2S0.clkm_conf.clkm_div_a = 1;              // Fractional clock divider’s denominator value
     I2S0.sample_rate_conf.tx_bck_div_num = 1;
+#if CONFIG_IDF_TARGET_ESP32S2
+    I2S0.clkm_conf.clk_sel = 1;
+#else
     I2S0.clkm_conf.clka_en = 1;                 // Set this bit to enable clk_apll.
+#endif
     I2S0.fifo_conf.tx_fifo_mod = (ch == 2) ? 0 : 1; // 32-bit dual or 16-bit single channel data
 
     dac_output_enable(DAC_CHANNEL_1);           // DAC, video on GPIO25
+#if CONFIG_IDF_TARGET_ESP32S2
+    dac_hal_digi_enable_dma(true);
+#else
     dac_i2s_enable();                           // start DAC!
+#endif 
 
     I2S0.conf.tx_start = 1;                     // start DMA!
     I2S0.int_clr.val = 0xFFFFFFFF;
@@ -680,7 +688,12 @@ ESP_8_BIT_composite::~ESP_8_BIT_composite()
   {
     // Free resources by mirroring everything allocated in start_dma()
     esp_intr_disable(_isr_handle);
+#if CONFIG_IDF_TARGET_ESP32S2
+    dac_hal_digi_enable_dma(false);
+    dac_digi_stop();
+#else
     dac_i2s_disable();
+#endif
     dac_output_disable(DAC_CHANNEL_1);
     if (!_pal_) {
         rtc_clk_apll_enable(false,0x46,0x97,0x4,1);
