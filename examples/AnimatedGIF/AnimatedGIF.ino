@@ -116,22 +116,32 @@ void GIFDraw(GIFDRAW *pDraw)
     }
 } /* GIFDraw() */
 
-
+int blink = HIGH;
+int led = 15;
+#include <driver/dac.h>
+#include <math.h>
 void setup() {
+  pinMode(led, OUTPUT);
   videoOut.begin();
   videoOut.copyAfterSwap = true; // gif library depends on data from previous buffer
   videoOut.fillScreen(0);
   videoOut.waitForFrame();
-
   gif.begin(LITTLE_ENDIAN_PIXELS);
+  // Output a Cosine Wave with frequency of 1000Hz and max. amplitude (default)
+  // Enable both DAC channels
+//   dac_output_enable(DAC_CHANNEL_1);
+//   dac_output_enable(DAC_CHANNEL_2);
 }
-
+float t = 0;
+#define DAC_CH1 17
 void loop() {
+  digitalWrite(led, blink);
+  blink = (blink ? LOW : HIGH);
   if (gif.open((uint8_t *)cat_and_galactic_squid_gif, cat_and_galactic_squid_gif_len, GIFDraw))
   {
     while (gif.playFrame(true, NULL))
     {
-      videoOut.waitForFrame();
+       videoOut.waitForFrame();
     }
     videoOut.waitForFrame();
     gif.close();

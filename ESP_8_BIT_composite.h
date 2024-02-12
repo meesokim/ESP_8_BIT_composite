@@ -58,7 +58,10 @@ SOFTWARE.
 #include "soc/rtc_io_reg.h"
 #include "soc/soc.h"
 #include "hal/dac_hal.h"
-
+#include "hal/spi_ll.h"
+#include "hal/adc_ll.h"
+#include "hal/dac_ll.h"
+#include "hal/clk_gate_ll.h"
 class ESP_8_BIT_composite
 {
   public:
