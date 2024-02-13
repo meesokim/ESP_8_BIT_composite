@@ -33,7 +33,6 @@ static int _pal_ = 0;
 //
 
 lldesc_t _dma_desc[2] = {0};
-int 
 intr_handle_t _isr_handle;
 
 extern "C"
@@ -43,11 +42,13 @@ void IRAM_ATTR video_isr(const volatile void* buf);
 void IRAM_ATTR i2s_intr_handler_video(void *arg)
 {
 #if CONFIG_IDF_TARGET_ESP32S2
-    if (GPSPI3.dma_int_st.out_done)
+    if (GPSPI3.dma_int_st.out_eof)
+    {
         // video_isr(((lldesc_t*)GPSPI3.dma_outlink_dscr_bf0)->buf);
         video_isr(((lldesc_t*)GPSPI3.dma_out_eof_des_addr)->buf); // get the next line of video
-    GPSPI3.dma_int_clr.val = GPSPI3.dma_int_st.val;
-    GPSPI3.dma_out_link.restart = 1;
+        GPSPI3.dma_int_clr.val = GPSPI3.dma_int_st.val;
+        GPSPI3.dma_out_link.restart = 1;
+    }
 #else
     if (I2S0.int_st.out_eof)
         video_isr(((lldesc_t*)I2S0.out_eof_des_addr)->buf); // get the next line of video
@@ -58,7 +59,7 @@ void IRAM_ATTR i2s_intr_handler_video(void *arg)
 static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
 {
 #if CONFIG_IDF_TARGET_ESP32S2
-    uint32_t int_mask = SPI_OUT_DONE_INT_ENA | SPI_OUT_EOF_INT_ENA | SPI_OUT_TOTAL_EOF_INT_ENA;
+    uint32_t int_mask = SPI_OUT_DONE_INT_ENA | SPI_OUT_EOF_INT_ENA;
     periph_module_enable(PERIPH_SPI3_DMA_MODULE);
     periph_module_enable(PERIPH_SARADC_MODULE);
     REG_SET_BIT(DPORT_PERIP_CLK_EN_REG, DPORT_APB_SARADC_CLK_EN_M);
@@ -99,8 +100,8 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     GPSPI3.dma_int_clr.val = 0xFFFFFFFF;
     GPSPI3.dma_int_ena.out_eof = 1;
     SET_PERI_REG_BITS(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_ADDR, (uint32_t)_dma_desc, 0);
-    REG_SET_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_OUT_FIFO_RST | SPI_OUT_AHBM_RST);
-    REG_CLR_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_OUT_FIFO_RST | SPI_OUT_AHBM_RST);
+    REG_SET_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_AHBM_FIFO_RST | SPI_AHBM_RST);
+    REG_CLR_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_AHBM_FIFO_RST | SPI_AHBM_RST);
     REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
     REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);    
     dac_digi_config_t conf;
