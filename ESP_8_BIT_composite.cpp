@@ -95,8 +95,8 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // GPSPI3.dma_int_clr.val = 0xFFFFFFFF;
     // GPSPI3.dma_int_ena.out_eof = 1;
     SET_PERI_REG_BITS(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_ADDR, (uint32_t)_dma_desc, 0);
-    REG_SET_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST);
-    REG_CLR_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST);
+    REG_SET_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_OUT_FIFO_RST | SPI_OUT_AHBM_RST);
+    REG_CLR_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_OUT_FIFO_RST | SPI_OUT_AHBM_RST);
     REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
     REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);    
     dac_digi_config_t conf;
