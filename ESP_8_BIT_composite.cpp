@@ -33,6 +33,7 @@ static int _pal_ = 0;
 //
 
 lldesc_t _dma_desc[2] = {0};
+int 
 intr_handle_t _isr_handle;
 
 extern "C"
@@ -46,6 +47,7 @@ void IRAM_ATTR i2s_intr_handler_video(void *arg)
         // video_isr(((lldesc_t*)GPSPI3.dma_outlink_dscr_bf0)->buf);
         video_isr(((lldesc_t*)GPSPI3.dma_out_eof_des_addr)->buf); // get the next line of video
     GPSPI3.dma_int_clr.val = GPSPI3.dma_int_st.val;
+    GPSPI3.dma_out_link.restart = 1;
 #else
     if (I2S0.int_st.out_eof)
         video_isr(((lldesc_t*)I2S0.out_eof_des_addr)->buf); // get the next line of video
@@ -76,7 +78,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // GPSPI3.dma_int_ena.out_eof = 1;
     // Create TX DMA buffers
     for (int i = 0; i < 2; i++) {
-        int n = line_width*2*ch;
+        int n = line_width*ch;
         if (n >= 4092) {
             printf("DMA chunk too big:%d\n",n);
             return -1;
@@ -90,10 +92,12 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
         _dma_desc[i].length = n;
         _dma_desc[i].size = n;
         _dma_desc[i].empty = (uint32_t)(i == 1 ? _dma_desc : _dma_desc+1);
+        // _dma_desc[i].empty = 0;
     }
+    GPSPI3.dma_conf.out_eof_mode = 0;
     // GPSPI3.dma_out_link.addr = (uint32_t)_dma_desc;
-    // GPSPI3.dma_int_clr.val = 0xFFFFFFFF;
-    // GPSPI3.dma_int_ena.out_eof = 1;
+    GPSPI3.dma_int_clr.val = 0xFFFFFFFF;
+    GPSPI3.dma_int_ena.out_eof = 1;
     SET_PERI_REG_BITS(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_ADDR, (uint32_t)_dma_desc, 0);
     REG_SET_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_OUT_FIFO_RST | SPI_OUT_AHBM_RST);
     REG_CLR_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_OUT_FIFO_RST | SPI_OUT_AHBM_RST);
@@ -675,8 +679,8 @@ void video_sync()
 {
   if (!_lines)
     return;
-  spi_ll_usr_is_done(&GPSPI3);
-//   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+//   spi_ll_usr_is_done(&GPSPI3);
+  ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 
 // Workhorse ISR handles audio and video updates
