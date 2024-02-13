@@ -128,11 +128,16 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
 
     if (!_pal_) {
         switch (samples_per_cc) {
-            case 3: rtc_clk_apll_enable(1,0x46,0x97,0x4,2);   break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
-            case 4: rtc_clk_apll_enable(1,0x46,0x97,0x4,1);   break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
+            case 3: rtc_clk_apll_enable(1,0x46,0x97,0x4,2);
+               spi_ll_master_cal_clock(SPI_LL_PERIPH_CLK_FREQ, 10738639, 0, 0);
+               break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
+            case 4: rtc_clk_apll_enable(1,0x46,0x97,0x4,1);
+               spi_ll_master_cal_clock(SPI_LL_PERIPH_CLK_FREQ, 14318186, 0, 0);
+               break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
         }
     } else {
         rtc_clk_apll_enable(1,0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
+        spi_ll_master_cal_clock(SPI_LL_PERIPH_CLK_FREQ, 17734476, 0, 0);
     }
     rtc_clk_apb_freq_update(14318181);
     // APB_SARADC.apb_adc_arb_ctrl.
