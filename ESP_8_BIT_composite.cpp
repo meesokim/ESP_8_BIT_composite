@@ -82,7 +82,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // GPSPI3.dma_int_ena.out_eof = 1;
     // Create TX DMA buffers
     for (int i = 0; i < 2; i++) {
-        int n = line_width*ch;
+        int n = line_width*ch*2;
         if (n >= 4092) {
             printf("DMA chunk too big:%d\n",n);
             return -1;
@@ -149,7 +149,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     conf.mode = DAC_CONV_NORMAL;
     conf.interval = 1;
     adc_digi_clk_t adclk;
-    adclk.use_apll = 2;
+    adclk.use_apll = 1;
     adclk.div_num = 1;
     adclk.div_a = 0;
     adclk.div_b = 1;
@@ -209,7 +209,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
 
     // Create TX DMA buffers
     for (int i = 0; i < 2; i++) {
-        int n = line_width*3*ch;
+        int n = line_width*2*ch;
         if (n >= 4092) {
             printf("DMA chunk too big:%d\n",n);
             return -1;
@@ -219,7 +219,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
             return -1;
 
         _dma_desc[i].owner = 1;
-        _dma_desc[i].eof = 0;
+        _dma_desc[i].eof = 1;
         _dma_desc[i].length = n;
         _dma_desc[i].size = n;
         _dma_desc[i].empty = (uint32_t)(i == 1 ? _dma_desc : _dma_desc+1);
