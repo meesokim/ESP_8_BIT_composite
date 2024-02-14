@@ -44,11 +44,11 @@ void IRAM_ATTR i2s_intr_handler_video(void *arg)
 #if CONFIG_IDF_TARGET_ESP32S2
     if (GPSPI3.dma_int_st.out_eof)
     {
-        // video_isr(((lldesc_t*)GPSPI3.dma_outlink_dscr_bf0)->buf);
+        // video_isr(((lldesc_t*)GPSPI3.dma_out_link.addr)->buf);
         video_isr(((lldesc_t*)GPSPI3.dma_out_eof_des_addr)->buf); // get the next line of video
-        GPSPI3.dma_int_clr.val = GPSPI3.dma_int_st.val;
-        GPSPI3.dma_out_link.restart = 1;
+        // GPSPI3.dma_out_link.restart = 1;
     }
+    GPSPI3.dma_int_clr.val = GPSPI3.dma_int_st.val;
 #else
     if (I2S0.int_st.out_eof)
         video_isr(((lldesc_t*)I2S0.out_eof_des_addr)->buf); // get the next line of video
@@ -59,7 +59,7 @@ void IRAM_ATTR i2s_intr_handler_video(void *arg)
 static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
 {
 #if CONFIG_IDF_TARGET_ESP32S2
-    uint32_t int_mask = SPI_OUT_DONE_INT_ENA | SPI_OUT_EOF_INT_ENA;
+    uint32_t int_mask = SPI_OUT_EOF_INT_ENA;
     periph_module_enable(PERIPH_SPI3_DMA_MODULE);
     periph_module_enable(PERIPH_SARADC_MODULE);
     REG_SET_BIT(DPORT_PERIP_CLK_EN_REG, DPORT_APB_SARADC_CLK_EN_M);
@@ -69,11 +69,12 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     REG_CLR_BIT(DPORT_PERIP_RST_EN_REG, DPORT_SPI3_RST_M);
     REG_WRITE(SPI_DMA_INT_CLR_REG(3), 0xFFFFFFFF);
     REG_WRITE(SPI_DMA_INT_ENA_REG(3), int_mask | REG_READ(SPI_DMA_INT_ENA_REG(3)));
-    REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
-    REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);
-    adc_ll_digi_clk_sel(true);
-    // dac_output_enable(DAC_CHANNEL_1);
+    // REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
+    // REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);
+    // adc_ll_digi_clk_sel(true);
+    dac_output_enable(DAC_CHANNEL_1);
     /* Acquire DMA peripheral */
+    // dac_output_enable(DAC_CHANNEL_2);
     // GPSPI3.cmd.val = 1;
     // GPSPI3.dma_conf.out_eof_mode = 1;
     // GPSPI3.dma_int_ena.out_eof = 1;
@@ -96,57 +97,59 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
         // _dma_desc[i].empty = 0;
     }
     GPSPI3.dma_conf.out_eof_mode = 0;
-    // GPSPI3.dma_out_link.addr = (uint32_t)_dma_desc;
+    GPSPI3.dma_out_link.addr = (uint32_t)_dma_desc;
     GPSPI3.dma_int_clr.val = 0xFFFFFFFF;
     GPSPI3.dma_int_ena.out_eof = 1;
-    SET_PERI_REG_BITS(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_ADDR, (uint32_t)_dma_desc, 0);
     REG_SET_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_AHBM_FIFO_RST | SPI_AHBM_RST);
     REG_CLR_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_AHBM_FIFO_RST | SPI_AHBM_RST);
+    SET_PERI_REG_BITS(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_ADDR, (uint32_t)_dma_desc, 0);
     REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
     REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);    
     dac_digi_config_t conf;
-    conf.mode = DAC_CONV_ALTER;
+    conf.mode = DAC_CONV_NORMAL;
     conf.interval = 0;
     adc_digi_clk_t adclk;
-    adclk.use_apll = true;
+    adclk.use_apll = false;
     adclk.div_num = 1;
-    adclk.div_a = 1;
+    adclk.div_a = 2;
     adclk.div_b = 0;
     conf.dig_clk = adclk;
+    dac_ll_digi_clk_inv(true);
     // *portOutputRegister(0)=1;
     // int a = *portInputRegister(0);
     dac_hal_digi_controller_config(&conf);
+    dac_hal_digi_enable_dma(true);
+    // dac_ll_digi_set_trigger_interval(1);
     // spi_ll_enable_bus_clock(SPI3_HOST, true);
-    dac_ll_power_on(DAC_CHANNEL_1);
+    // dac_ll_power_on(DAC_CHANNEL_1);
     // spi_ll_master_init(&GPSPI3);
     // spi_ll_enable_intr(&GPSPI3, (spi_ll_intr_t) (SPI_LL_INTR_TRANS_DONE));
-    dac_ll_digi_set_convert_mode(DAC_CONV_ALTER);
+    // dac_ll_digi_set_convert_mode(DAC_CONV_ALTER);
     // dac_ll_rtc_reset(); 
-    adc_ll_digi_controller_clk_div(1, 0, 1);
+    // adc_ll_digi_controller_clk_div(1, 0, 1);
 
     // spi_dma_ll_tx_start(&GPSPI3, 1, (lldesc_t *)_dma_desc);
 
     if (!_pal_) {
         switch (samples_per_cc) {
             case 3: rtc_clk_apll_enable(1,0x46,0x97,0x4,2);
-               spi_ll_master_cal_clock(SPI_LL_PERIPH_CLK_FREQ, 10738639, 0, 0);
+            //    spi_ll_master_set_clock(&GPSPI3, SPI_LL_PERIPH_CLK_FREQ, 10738639, 3);
                break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
             case 4: rtc_clk_apll_enable(1,0x46,0x97,0x4,1);
-               spi_ll_master_cal_clock(SPI_LL_PERIPH_CLK_FREQ, 14318186, 0, 0);
+            //    spi_ll_master_set_clock(&GPSPI3, SPI_LL_PERIPH_CLK_FREQ, 14318186, 3);
                break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
         }
     } else {
         rtc_clk_apll_enable(1,0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
-        spi_ll_master_cal_clock(SPI_LL_PERIPH_CLK_FREQ, 17734476, 0, 0);
+        // spi_ll_master_set_clock(&GPSPI3, SPI_LL_PERIPH_CLK_FREQ, 17734476, 3);
     }
-    rtc_clk_apb_freq_update(14318181);
+    // rtc_clk_apb_freq_update(14318181);
     // APB_SARADC.apb_adc_arb_ctrl.
     // dac_ll_digi_set_trigger_interval(1);
-    // dac_hal_digi_enable_dma(true);
-    dac_digi_start();
-    if (esp_intr_alloc(ETS_SPI3_DMA_INTR_SOURCE, ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_IRAM,
+    if (esp_intr_alloc(ETS_SPI3_DMA_INTR_SOURCE, 0, /*ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_IRAM,*/
         i2s_intr_handler_video, 0, &_isr_handle) != ESP_OK)
         return -1;
+    dac_digi_start();
 
     // GPSPI3.dma_out_link.dma_tx_ena = 1;                     // start DMA!
     // GPSPI3.dma_out_link.start = 1;
@@ -686,7 +689,7 @@ void video_sync()
   if (!_lines)
     return;
 //   spi_ll_usr_is_done(&GPSPI3);
-  ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+//   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 
 // Workhorse ISR handles audio and video updates
@@ -749,9 +752,9 @@ void IRAM_ATTR video_isr(const volatile void* vbuf)
           _swap_counter++;
 
           // Signal video_sync() swap has completed
-          vTaskNotifyGiveFromISR(
-              _swapCompleteNotify,
-              NULL);
+           vTaskNotifyGiveFromISR(
+               _swapCompleteNotify,
+               NULL);
         }
     }
 
@@ -856,7 +859,7 @@ void ESP_8_BIT_composite::begin()
 
   // Initialize double-buffering infrastructure
   _swapReady = false;
-//   _swapCompleteNotify = xTaskGetCurrentTaskHandle();
+  _swapCompleteNotify = xTaskGetCurrentTaskHandle();
 
   // Start video signal generator
   video_init(4, !_pal_);

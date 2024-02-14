@@ -127,10 +127,6 @@ void setup() {
   videoOut.fillScreen(0);
   videoOut.waitForFrame();
   gif.begin(LITTLE_ENDIAN_PIXELS);
-  // Output a Cosine Wave with frequency of 1000Hz and max. amplitude (default)
-  // Enable both DAC channels
-//   dac_output_enable(DAC_CHANNEL_1);
-//   dac_output_enable(DAC_CHANNEL_2);
 }
 float t = 0;
 #define DAC_CH1 17
