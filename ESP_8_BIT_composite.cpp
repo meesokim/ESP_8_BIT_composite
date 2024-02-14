@@ -115,22 +115,22 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // dac_ll_rtc_reset(); 
     // adc_ll_digi_controller_clk_div(0, 0, 0);
 
+    //  Setup up the apll: See ref 3.2.7 Audio PLL
+    //  f_xtal = (int)rtc_clk_xtal_freq_get() * 1000000;
+    //  f_out = xtal_freq * (4 + sdm2 + sdm1/256 + sdm0/65536); // 250 < f_out < 500
+    //  apll_freq = f_out/((o_div + 2) * 2)
+    //  operating range of the f_out is 250 MHz ~ 500 MHz
+    //  operating range of the apll_freq is 16 ~ 128 MHz.
+    //  select sdm0,sdm1,sdm2 to produce nice multiples of colorburst frequencies
 
-    // if (!_pal_) {
-    //     switch (samples_per_cc) {
-    //         case 3: 
-    //             rtc_clk_apll_enable(1,0x46,0x97,0x4,2);
-    //             // spi_ll_master_set_clock(&GPSPI3, SPI_LL_PERIPH_CLK_FREQ, 10738639, 3);
-    //             break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
-    //         case 4: 
-    //             rtc_clk_apll_enable(1,0x46,0x97,0x4,1);
-    //             // spi_ll_master_set_clock(&GPSPI3, SPI_LL_PERIPH_CLK_FREQ, 14318186, 3);
-    //             break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
-    //     }
-    // } else {
-    //     rtc_clk_apll_enable(1,0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
-    //     // spi_ll_master_set_clock(&GPSPI3, SPI_LL_PERIPH_CLK_FREQ, 17734476, 3);
-    // }
+    //  see calc_freq() for math: (4+a)*10/((2 + b)*2) mhz
+    //  up to 20mhz seems to work ok:
+    //  rtc_clk_apll_enable(1,0x00,0x00,0x4,0);   // 20mhz for fancy DDS
+    rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
+    // rclk.xtal_freq = 20;
+    rclk.cpu_freq_mhz = 240;
+    // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
+    rtc_clk_init(rclk);
 
     if (!_pal_) {
         switch (samples_per_cc) {
@@ -139,11 +139,12 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
         }
     } else {
         rtc_clk_apll_enable(1,0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
-    }    
-    spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
-    spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
+    }
+    // rtc_clk_8m_enable(true, true);
+    // spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
+    // spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
     spi_dma_ll_set_out_eof_generation(&GPSPI3, 1, true);
-    spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, true);
+    spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, false);
     spi_dma_ll_tx_start(&GPSPI3, 1, (lldesc_t *)_dma_desc);
     dac_digi_config_t conf;
     conf.mode = DAC_CONV_NORMAL;
@@ -158,14 +159,14 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // *portOutputRegister(0)=1;
     // int a = *portInputRegister(0);
     dac_hal_digi_controller_config(&conf);
-
-    dac_hal_digi_enable_dma(true);
-    dac_ll_digi_set_trigger_interval(10);
+    // adc_ll_digi_controller_clk_div(1, 0, 1);
+    // dac_hal_digi_enable_dma(true);
+    // dac_ll_digi_set_trigger_interval(10);
     // rtc_clk_apb_freq_update(78000000);
     // APB_SARADC.apb_adc_clkm_conf.clk_en = true;
     APB_SARADC.apb_dac_ctrl.dac_timer_target = 2;
     APB_SARADC.apb_dac_ctrl.dac_timer_en = true;
-    // APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_force = true;
+    APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_force = true;
     // APB_SARADC.apb_adc_arb_ctrl.adc_arb_grant_force = true;
     // APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_priority = 3;
     // dac_ll_digi_set_trigger_interval(1);
@@ -173,6 +174,9 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
         i2s_intr_handler_video, 0, &_isr_handle) != ESP_OK)
         return -1;
     dac_digi_start();
+
+    GPSPI3.dma_int_clr.val = -1;
+    GPSPI3.dma_int_ena.out_eof = 1;
     // GPSPI3.dma_out_link.dma_tx_ena = 1;                     // start DMA!
     // GPSPI3.dma_out_link.start = 1;
     // GPSPI3.dma_conf.ahbm_rst = 1;
@@ -708,8 +712,8 @@ void IRAM_ATTR pal_sync(uint16_t* line, int i)
 // Wait for front and back buffers to swap before starting drawing
 void video_sync()
 {
-  if (!_lines)
-    return;
+//   if (!_lines)
+//     return;
 //   spi_ll_usr_is_done(&GPSPI3);
 //   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
