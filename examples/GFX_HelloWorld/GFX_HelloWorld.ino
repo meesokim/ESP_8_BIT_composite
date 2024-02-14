@@ -61,7 +61,7 @@ uint8_t colorCycle[] = {
 };
 
 // Create an instance of the graphics library
-ESP_8_BIT_GFX videoOut(true /* = NTSC */, 8 /* = RGB332 color */);
+ESP_8_BIT_GFX videoOut(false /* = NTSC */, 8 /* = RGB332 color */);
 
 void setup() {
   // Initial setup of graphics library

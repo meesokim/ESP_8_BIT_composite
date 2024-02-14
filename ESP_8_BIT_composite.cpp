@@ -170,7 +170,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // APB_SARADC.apb_adc_arb_ctrl.adc_arb_grant_force = true;
     // APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_priority = 3;
     // dac_ll_digi_set_trigger_interval(1);
-    if (esp_intr_alloc(ETS_SPI3_DMA_INTR_SOURCE, 0, /*ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_IRAM,*/
+    if (esp_intr_alloc(ETS_SPI3_DMA_INTR_SOURCE, ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_IRAM,
         i2s_intr_handler_video, 0, &_isr_handle) != ESP_OK)
         return -1;
     dac_digi_start();
