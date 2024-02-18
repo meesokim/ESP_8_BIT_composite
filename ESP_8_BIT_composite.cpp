@@ -59,6 +59,12 @@ void IRAM_ATTR i2s_intr_handler_video(void *arg)
 
 static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
 {
+    rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
+    // rclk.xtal_freq = 20;
+    rclk.cpu_freq_mhz = 240;
+    // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
+    rtc_clk_init(rclk);
+
 #if CONFIG_IDF_TARGET_ESP32S2
     uint32_t int_mask = SPI_OUT_EOF_INT_ENA;
     periph_module_enable(PERIPH_SPI3_DMA_MODULE);
@@ -73,7 +79,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     REG_WRITE(SPI_DMA_INT_ENA_REG(3), int_mask | REG_READ(SPI_DMA_INT_ENA_REG(3)));
     // REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
     // REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);
-    adc_ll_digi_clk_sel(true);
+    // adc_ll_digi_clk_sel(true);
     dac_output_enable(DAC_CHANNEL_1);
     /* Acquire DMA peripheral */
     // dac_output_enable(DAC_CHANNEL_2);
@@ -126,20 +132,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     //  see calc_freq() for math: (4+a)*10/((2 + b)*2) mhz
     //  up to 20mhz seems to work ok:
     //  rtc_clk_apll_enable(1,0x00,0x00,0x4,0);   // 20mhz for fancy DDS
-    rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
-    // rclk.xtal_freq = 20;
-    rclk.cpu_freq_mhz = 240;
-    // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
-    rtc_clk_init(rclk);
 
-    if (!_pal_) {
-        switch (samples_per_cc) {
-            case 3: rtc_clk_apll_enable(1,0x46,0x97,0x4,2);   break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
-            case 4: rtc_clk_apll_enable(1,0x46,0x97,0x4,1);   break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
-        }
-    } else {
-        rtc_clk_apll_enable(1,0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
-    }
     // rtc_clk_8m_enable(true, true);
     // spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
     // spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
@@ -148,9 +141,9 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     spi_dma_ll_tx_start(&GPSPI3, 1, (lldesc_t *)_dma_desc);
     dac_digi_config_t conf;
     conf.mode = DAC_CONV_NORMAL;
-    conf.interval = 1;
+    conf.interval = 10;
     adc_digi_clk_t adclk;
-    adclk.use_apll = 1;
+    adclk.use_apll = true;
     adclk.div_num = 1;
     adclk.div_a = 0;
     adclk.div_b = 1;
@@ -159,17 +152,29 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // *portOutputRegister(0)=1;
     // int a = *portInputRegister(0);
     dac_hal_digi_controller_config(&conf);
-    // adc_ll_digi_controller_clk_div(1, 0, 1);
+    if (!_pal_) {
+        adc_ll_digi_controller_clk_div(1, 0, 1);
+        switch (samples_per_cc) {
+            case 3: rtc_clk_apll_enable(1,0x46,0x97,0x4,2);   break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
+            case 4: rtc_clk_apll_enable(1,0x46,0x97,0x4,1);   break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
+        }
+    } else {
+        adc_ll_digi_controller_clk_div(1, 0, 0);
+        rtc_clk_apll_enable(1,0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
+    }
     // dac_hal_digi_enable_dma(true);
     // dac_ll_digi_set_trigger_interval(10);
     // rtc_clk_apb_freq_update(78000000);
     // APB_SARADC.apb_adc_clkm_conf.clk_en = true;
-    APB_SARADC.apb_dac_ctrl.dac_timer_target = 2;
-    APB_SARADC.apb_dac_ctrl.dac_timer_en = true;
-    APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_force = true;
+    dac_hal_rtc_sync_by_adc(true);
+    dac_ll_digi_set_convert_mode(conf.mode);
+    dac_ll_digi_set_trigger_interval(2);
+    dac_ll_digi_trigger_output(true);
+    // APB_SARADC.apb_dac_ctrl.dac_timer_target = 2;
+    // APB_SARADC.apb_dac_ctrl.dac_timer_en = true;
+    // APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_force = true;
     // APB_SARADC.apb_adc_arb_ctrl.adc_arb_grant_force = true;
-    // APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_priority = 3;
-    // dac_ll_digi_set_trigger_interval(1);
+    // APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_priority = 1;
     if (esp_intr_alloc(ETS_SPI3_DMA_INTR_SOURCE, ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_IRAM,
         i2s_intr_handler_video, 0, &_isr_handle) != ESP_OK)
         return -1;
