@@ -137,7 +137,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
     // spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
     spi_dma_ll_set_out_eof_generation(&GPSPI3, 1, true);
-    spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, false);
+    spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, true);
     spi_dma_ll_tx_start(&GPSPI3, 1, (lldesc_t *)_dma_desc);
     dac_digi_config_t conf;
     conf.mode = DAC_CONV_NORMAL;
@@ -166,7 +166,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // dac_ll_digi_set_trigger_interval(10);
     // rtc_clk_apb_freq_update(78000000);
     // APB_SARADC.apb_adc_clkm_conf.clk_en = true;
-    dac_hal_rtc_sync_by_adc(true);
+    // dac_hal_rtc_sync_by_adc(true);
     dac_ll_digi_set_convert_mode(conf.mode);
     dac_ll_digi_set_trigger_interval(2);
     dac_ll_digi_trigger_output(true);
