@@ -157,9 +157,10 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
         switch (samples_per_cc) {
             case 3: 
                 // adc_ll_digi_controller_clk_div(5, 63, 43);
-                rtc_clk_apll_enable(false,1,183,255,31);   
+                rtc_clk_apll_enable(false,13,181,255,31);   
                 break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
-            case 4: rtc_clk_apll_enable(true,19,160,0,31);   break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
+            case 4: rtc_clk_apll_enable(true,19,160,0,31);   
+                break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
         }
     } else {
         // adc_ll_digi_controller_clk_div(1, 0, 0);
