@@ -138,7 +138,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     conf.mode = DAC_CONV_NORMAL;
     conf.interval = 0;
     adc_digi_clk_t adclk;
-    adclk.use_apll = false;
+    adclk.use_apll = true;
     adclk.div_num = 2;
     adclk.div_a = 0;
     adclk.div_b = 1;
