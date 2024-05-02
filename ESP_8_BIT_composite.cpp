@@ -46,7 +46,7 @@ void IRAM_ATTR i2s_intr_handler_video(void *arg)
     {
         // video_isr(((lldesc_t*)GPSPI3.dma_out_link.addr)->buf);
         video_isr(((lldesc_t*)GPSPI3.dma_out_eof_des_addr)->buf); // get the next line of video
-        // GPSPI3.dma_out_link.restart = 1;
+        GPSPI3.dma_out_link.restart = 1;
     }
     GPSPI3.dma_int_clr.val = GPSPI3.dma_int_st.val;
     spi_dma_ll_tx_restart(&GPSPI3, 1);
