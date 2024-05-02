@@ -62,7 +62,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
     // rclk.xtal_freq = 20;
     rclk.cpu_freq_mhz = 240;
-    // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
+    rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
     rtc_clk_init(rclk);
 
 #if CONFIG_IDF_TARGET_ESP32S2
