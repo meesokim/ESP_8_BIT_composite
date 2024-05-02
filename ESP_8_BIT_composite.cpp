@@ -163,8 +163,8 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
                 break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
         }
     } else {
-        // adc_ll_digi_controller_clk_div(1, 0, 0);
-        rtc_clk_apll_enable(true,25,67,10,31);     // 17.734476mhz ~4x PAL
+        rtc_clk_apll_enable(false,25,167,10,31);     // 17.734476mhz ~4x PAL
+        adc_ll_digi_controller_clk_div(0, 10, 1);
     }
     // dac_hal_digi_enable_dma(true);
     // dac_ll_digi_set_trigger_interval(10);
