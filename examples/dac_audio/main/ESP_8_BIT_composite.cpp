@@ -20,8 +20,8 @@
 */
 
 #include "ESP_8_BIT_composite.h"
-// #include "driver/dac_continuous.h"
-// #include "soc/clk_tree_defs.h"
+#include "math.h"
+#include "esp_check.h"
 
 static const char *TAG = "ESP_8_BIT";
 
@@ -34,7 +34,7 @@ static int _pal_ = 0;
 // low level HW setup of DAC/DMA/APLL/PWM
 //
 
-lldesc_t _dma_desc[2] = {0};
+// lldesc_t _dma_desc[2] = {0};
 intr_handle_t _isr_handle;
 
 extern "C"
@@ -44,14 +44,14 @@ void IRAM_ATTR video_isr(const volatile void* buf);
 void IRAM_ATTR i2s_intr_handler_video(void *arg)
 {
 #if CONFIG_IDF_TARGET_ESP32S2
-    if (GPSPI3.dma_int_st.out_eof)
+    // if (GPSPI3.dma_int_st.out_eof)
     {
         // video_isr(((lldesc_t*)GPSPI3.dma_out_link.addr)->buf);
-        video_isr(((lldesc_t*)GPSPI3.dma_out_eof_des_addr)->buf); // get the next line of video
-        GPSPI3.dma_out_link.restart = 1;
+        // video_isr(((lldesc_t*)GPSPI3.dma_out_eof_des_addr)->buf); // get the next line of video
+        // GPSPI3.dma_out_link.restart = 1;
     }
-    GPSPI3.dma_int_clr.val = GPSPI3.dma_int_st.val;
-    spi_dma_ll_tx_restart(&GPSPI3, 1);
+    // GPSPI3.dma_int_clr.val = GPSPI3.dma_int_st.val;
+    // spi_dma_ll_tx_restart(&GPSPI3, 1);
 #else
     if (I2S0.int_st.out_eof)
         video_isr(((lldesc_t*)I2S0.out_eof_des_addr)->buf); // get the next line of video
@@ -64,150 +64,47 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
     // rclk.xtal_freq = 20;
     rclk.cpu_freq_mhz = 240;
-    rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
+    // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
     rtc_clk_init(rclk);
-
+    int freq = 0;
 #if CONFIG_IDF_TARGET_ESP32S2
-    uint32_t int_mask = SPI_OUT_EOF_INT_ENA;
-    periph_module_enable(PERIPH_SPI3_DMA_MODULE);
-    periph_module_enable(PERIPH_SARADC_MODULE);
-    REG_SET_BIT(DPORT_PERIP_CLK_EN_REG, DPORT_APB_SARADC_CLK_EN_M);
-    REG_SET_BIT(DPORT_PERIP_CLK_EN_REG, DPORT_SPI3_DMA_CLK_EN_M);
-    REG_SET_BIT(DPORT_PERIP_CLK_EN_REG, DPORT_SPI3_CLK_EN);
-    REG_CLR_BIT(DPORT_PERIP_RST_EN_REG, DPORT_APB_SARADC_RST_M);
-    REG_CLR_BIT(DPORT_PERIP_RST_EN_REG, DPORT_SPI3_DMA_RST_M);
-    REG_CLR_BIT(DPORT_PERIP_RST_EN_REG, DPORT_SPI3_RST_M);
-    REG_WRITE(SPI_DMA_INT_CLR_REG(3), 0xFFFFFFFF);
-    REG_WRITE(SPI_DMA_INT_ENA_REG(3), int_mask | REG_READ(SPI_DMA_INT_ENA_REG(3)));
-    // REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
-    // REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);
-    // adc_ll_digi_clk_sel(true);
-    dac_output_enable(DAC_CHANNEL_1);
-    /* Acquire DMA peripheral */
-    // dac_output_enable(DAC_CHANNEL_2);
-    // GPSPI3.cmd.val = 1;
-    // GPSPI3.dma_conf.out_eof_mode = 1;
-    // GPSPI3.dma_int_ena.out_eof = 1;
-    // Create TX DMA buffers
-    for (int i = 0; i < 2; i++) {
-        int n = line_width*ch*2;
-        if (n >= 4092) {
-            printf("DMA chunk too big:%d\n",n);
-            return -1;
-        }
-        _dma_desc[i].buf = (uint8_t*)heap_caps_calloc(1, n, MALLOC_CAP_DMA);
-        if (!_dma_desc[i].buf)
-            return -1;
-
-        _dma_desc[i].owner = 1;
-        _dma_desc[i].eof = 1;
-        _dma_desc[i].length = n;
-        _dma_desc[i].size = n;
-        _dma_desc[i].empty = (uint32_t)(i == 1 ? _dma_desc : _dma_desc+1);
-        // _dma_desc[i].empty = 0;
-    }
-    // GPSPI3.dma_conf.out_eof_mode = 0;
-    // GPSPI3.dma_out_link.addr = (uint32_t)_dma_desc;
-    // GPSPI3.dma_int_clr.val = 0xFFFFFFFF;
-    // GPSPI3.dma_int_ena.out_eof = 1;
-    // REG_SET_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_AHBM_FIFO_RST | SPI_AHBM_RST);
-    // REG_CLR_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_AHBM_FIFO_RST | SPI_AHBM_RST);
-    // SET_PERI_REG_BITS(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_ADDR, (uint32_t)_dma_desc, 0);
-    // REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
-    // REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);    
-    // spi_ll_enable_bus_clock(SPI3_HOST, true);
-    // dac_ll_power_on(DAC_CHANNEL_1);
-    // spi_ll_master_init(&GPSPI3);
-    // spi_ll_enable_intr(&GPSPI3, (spi_ll_intr_t) (SPI_LL_INTR_TRANS_DONE));
-    // dac_ll_digi_set_convert_mode(DAC_CONV_NORMAL);
-    // dac_ll_rtc_reset(); 
-    // adc_ll_digi_controller_clk_div(0, 0, 0);
-
-    //  Setup up the apll: See ref 3.2.7 Audio PLL
-    //  f_xtal = (int)rtc_clk_xtal_freq_get() * 1000000;
-    //  f_out = xtal_freq * (4 + sdm2 + sdm1/256 + sdm0/65536); // 250 < f_out < 500
-    //  apll_freq = f_out/((o_div + 2) * 2)
-    //  operating range of the f_out is 250 MHz ~ 500 MHz
-    //  operating range of the apll_freq is 16 ~ 128 MHz.
-    //  select sdm0,sdm1,sdm2 to produce nice multiples of colorburst frequencies
-
-    //  see calc_freq() for math: (4+a)*10/((2 + b)*2) mhz
-    //  up to 20mhz seems to work ok:
-    //  rtc_clk_apll_enable(1,0x00,0x00,0x4,0);   // 20mhz for fancy DDS
-
-    // rtc_clk_8m_enable(true, true);
-    dac_digi_config_t conf;
-    conf.mode = DAC_CONV_NORMAL;
-    conf.interval = 0;
-    // adc_digi_clk_t adclk;
-    // adclk.use_apll = false;
-    // adclk.div_num = 1;
-    // adclk.div_a = 0;
-    // adclk.div_b = 0;
-    // conf.dig_clk = adclk;
-    spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
-    spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
-    spi_dma_ll_set_out_eof_generation(&GPSPI3, 1, true);
-    // spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, true);
-    spi_dma_ll_tx_start(&GPSPI3, 1, (lldesc_t *)_dma_desc);
-    dac_ll_digi_clk_inv(true);
-    // *portOutputRegister(0)=1;
-    // int a = *portInputRegister(0);
-    // dac_hal_digi_controller_config(&conf);
-    // rtc_clk_apll_enable(1,0x46,0x97,0x4,1);
-    adc_ll_digi_clk_sel(2);
-    adc_ll_digi_controller_clk_div(1, 220, 33);
-    
- 
- 
-    if (!_pal_) {
+    dac_continuous_handle_t dac_handle;
+    dac_continuous_config_t cont_cfg = {
+        .chan_mask = DAC_CHANNEL_MASK_ALL,
+        .desc_num = 4,
+        .buf_size = 2048,
+        .freq_hz = CONFIG_EXAMPLE_AUDIO_SAMPLE_RATE,
+        .offset = 0,
+        .clk_src = DAC_DIGI_CLK_SRC_APLL,   // Using APLL as clock source to get a wider frequency range
+        /* Assume the data in buffer is 'A B C D E F'
+         * DAC_CHANNEL_MODE_SIMUL:
+         *      - channel 0: A B C D E F
+         *      - channel 1: A B C D E F
+         * DAC_CHANNEL_MODE_ALTER:
+         *      - channel 0: A C E
+         *      - channel 1: B D F
+         */
+        .chan_mode = DAC_CHANNEL_MODE_SIMUL,
+    };
+   if (!_pal_) {
         switch (samples_per_cc) {
             case 3: 
-                // adc_ll_digi_controller_clk_div(5, 63, 43);
-                rtc_clk_apll_enable(false,13,181,255,31);   
+                // rtc_clk_apll_enable(false,13,181,255,31);   
+                freq = 10736863;
                 break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
-            case 4: rtc_clk_apll_enable(true,19,160,0,31);   
+            case 4: 
+                // rtc_clk_apll_enable(true,19,160,0,31);   
+                freq = 14318181;
                 break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
         }
     } else {
-        rtc_clk_apll_enable(false,25,167,10,31);     // 17.734476mhz ~4x PAL
-        adc_ll_digi_controller_clk_div(0, 10, 1);
+        // rtc_clk_apll_enable(false,25,167,10,31);     // 17.734476mhz ~4x PAL
+        freq = 17734476;
     }
-    // dac_hal_digi_enable_dma(true);
-    // dac_ll_digi_set_trigger_interval(10);
-    // rtc_clk_apb_freq_update(78000000);
-    // APB_SARADC.apb_adc_clkm_conf.clk_en = true;
-    // dac_hal_rtc_sync_by_adc(true);
-    dac_ll_digi_set_convert_mode(conf.mode);
-    dac_ll_digi_set_trigger_interval(1);
-    dac_ll_digi_trigger_output(false);
-    // APB_SARADC.apb_dac_ctrl.dac_timer_target = 2;
-    // APB_SARADC.apb_dac_ctrl.dac_timer_en = true;
-    // APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_force = true;
-    // APB_SARADC.apb_adc_arb_ctrl.adc_arb_grant_force = true;
-    // APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_priority = 1;
-    if (esp_intr_alloc(ETS_SPI3_DMA_INTR_SOURCE, ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_IRAM,
-        i2s_intr_handler_video, 0, &_isr_handle) != ESP_OK)
-        return -1;
-    dac_digi_start();
-
-    // GPSPI3.dma_int_clr.val = -1;
-    // GPSPI3.dma_int_ena.out_eof = 1;
-    // GPSPI3.dma_out_link.dma_tx_ena = 1;                     // start DMA!
-    // GPSPI3.dma_out_link.start = 1;
-    // GPSPI3.dma_conf.ahbm_rst = 1;
-    // GPSPI3.dma_conf.ahbm_fifo_rst = 1;
-    // GPSPI3.dma_conf.ahbm_rst = 0;
-    // GPSPI3.dma_conf.ahbm_fifo_rst = 0;
-    // dac_ll_rtc_reset();
-    // dac_ll_rtc_sync_by_adc(true);
-    // dac_ll_digi_clk_inv(true);
-    // spi_dma_ll_tx_reset(&GPSPI3, 1);
-    // spi_dma_ll_tx_reset(&GPSPI3, 0);
-    // spi_ll_dma_tx_fifo_reset(&GPSPI3);
-    // spi_ll_dma_tx_enable(&GPSPI3, true);
-
-
+    /* Allocate continuous channels */
+    cont_cfg.freq_hz = freq;
+    ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));    
+    ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
 #else
     periph_module_enable(PERIPH_I2S0_MODULE);
 
@@ -736,7 +633,7 @@ void video_sync()
 
 // Workhorse ISR handles audio and video updates
 extern "C"
-void IRAM_ATTR video_isr(const volatile void* vbuf)
+void video_isr(const volatile void* vbuf)
 {
     if (!_lines)
         return;
@@ -841,25 +738,16 @@ ESP_8_BIT_composite::~ESP_8_BIT_composite()
   if (_started)
   {
     // Free resources by mirroring everything allocated in start_dma()
-    esp_intr_disable(_isr_handle);
-#if CONFIG_IDF_TARGET_ESP32S2
-    dac_hal_digi_enable_dma(false);
-    dac_digi_stop();
-#else
-    dac_i2s_disable();
-#endif
-    dac_output_disable(DAC_CHANNEL_1);
-    if (!_pal_) {
-        rtc_clk_apll_enable(false,0x46,0x97,0x4,1);
-    } else {
-        rtc_clk_apll_enable(false,0x04,0xA4,0x6,1);
-    }
-    for (int i = 0; i < 2; i++) {
-      heap_caps_free((void*)(_dma_desc[i].buf));
-      _dma_desc[i].buf = NULL;
-    }
-    // Missing: There doesn't seem to be a esp_intr_free() to go with esp_intr_alloc()?
-    periph_module_disable(PERIPH_I2S0_MODULE);
+    // esp_intr_disable(_isr_handle);
+    // if (!_pal_) {
+    //     rtc_clk_apll_enable(false,0x46,0x97,0x4,1);
+    // } else {
+    //     rtc_clk_apll_enable(false,0x04,0xA4,0x6,1);
+    // }
+    // for (int i = 0; i < 2; i++) {
+    //   heap_caps_free((void*)(_dma_desc[i].buf));
+    //   _dma_desc[i].buf = NULL;
+    // }
     _started = false;
   }
   _lines = NULL;
@@ -874,7 +762,7 @@ void ESP_8_BIT_composite::instance_check()
 {
   if (_instance_ != this)
   {
-    ESP_LOGE(TAG, "Only one instance of ESP_8_BIT_composite class is allowed.");
+    ESP_LOGI(TAG, "Only one instance of ESP_8_BIT_composite class is allowed.");
     ESP_ERROR_CHECK(ESP_FAIL);
   }
 }
@@ -888,7 +776,7 @@ void ESP_8_BIT_composite::begin()
 
   if (_started)
   {
-    ESP_LOGE(TAG, "begin() is only allowed to be called once.");
+    ESP_LOGI(TAG, "begin() is only allowed to be called once.");
     ESP_ERROR_CHECK(ESP_FAIL);
   }
   _started = true;
@@ -940,7 +828,7 @@ uint8_t** ESP_8_BIT_composite::frameBufferAlloc()
   lineArray = new uint8_t*[linesPerFrame];
   if ( NULL == lineArray )
   {
-    ESP_LOGE(TAG, "Frame lines array allocation fail");
+    ESP_LOGI(TAG, "Frame lines array allocation fail");
     ESP_ERROR_CHECK(ESP_FAIL);
   }
 
@@ -949,7 +837,7 @@ uint8_t** ESP_8_BIT_composite::frameBufferAlloc()
     lineChunk = new uint8_t[chunkSize];
     if ( NULL == lineChunk )
     {
-      ESP_LOGE(TAG, "Frame buffer chunk allocation fail");
+      ESP_LOGI(TAG, "Frame buffer chunk allocation fail");
       ESP_ERROR_CHECK(ESP_FAIL);
     }
     lineStep = lineChunk;
