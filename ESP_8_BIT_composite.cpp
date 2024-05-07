@@ -20,8 +20,6 @@
 */
 
 #include "ESP_8_BIT_composite.h"
-// #include "driver/dac_continuous.h"
-// #include "soc/clk_tree_defs.h"
 
 static const char *TAG = "ESP_8_BIT";
 
@@ -64,7 +62,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
     // rclk.xtal_freq = 20;
     rclk.cpu_freq_mhz = 240;
-    rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
+    // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
     rtc_clk_init(rclk);
 
 #if CONFIG_IDF_TARGET_ESP32S2
@@ -139,27 +137,22 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     dac_digi_config_t conf;
     conf.mode = DAC_CONV_NORMAL;
     conf.interval = 0;
-    // adc_digi_clk_t adclk;
-    // adclk.use_apll = false;
-    // adclk.div_num = 1;
-    // adclk.div_a = 0;
-    // adclk.div_b = 0;
-    // conf.dig_clk = adclk;
+    adc_digi_clk_t adclk;
+    adclk.use_apll = false;
+    adclk.div_num = 2;
+    adclk.div_a = 0;
+    adclk.div_b = 1;
+    conf.dig_clk = adclk;
     spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
     spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
     spi_dma_ll_set_out_eof_generation(&GPSPI3, 1, true);
     // spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, true);
     spi_dma_ll_tx_start(&GPSPI3, 1, (lldesc_t *)_dma_desc);
-    dac_ll_digi_clk_inv(true);
+    // dac_ll_digi_clk_inv(false);
     // *portOutputRegister(0)=1;
     // int a = *portInputRegister(0);
     // dac_hal_digi_controller_config(&conf);
-    // rtc_clk_apll_enable(1,0x46,0x97,0x4,1);
-    adc_ll_digi_clk_sel(2);
-    adc_ll_digi_controller_clk_div(1, 220, 33);
-    
- 
- 
+    adc_ll_digi_controller_clk_div(1, 0, 1);
     if (!_pal_) {
         switch (samples_per_cc) {
             case 3: 
@@ -180,7 +173,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // dac_hal_rtc_sync_by_adc(true);
     dac_ll_digi_set_convert_mode(conf.mode);
     dac_ll_digi_set_trigger_interval(1);
-    dac_ll_digi_trigger_output(false);
+    dac_ll_digi_trigger_output(true);
     // APB_SARADC.apb_dac_ctrl.dac_timer_target = 2;
     // APB_SARADC.apb_dac_ctrl.dac_timer_en = true;
     // APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_force = true;
