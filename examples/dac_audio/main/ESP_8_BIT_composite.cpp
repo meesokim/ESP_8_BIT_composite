@@ -36,38 +36,43 @@ static int _pal_ = 0;
 
 // lldesc_t _dma_desc[2] = {0};
 intr_handle_t _isr_handle;
+int _line_counter;
 
 extern "C"
 void IRAM_ATTR video_isr(const volatile void* buf);
+uint8_t *vbuf;
 
-// simple isr
-void IRAM_ATTR i2s_intr_handler_video(void *arg)
+static bool IRAM_ATTR  dac_on_convert_stop_callback(dac_continuous_handle_t handle, const dac_event_data_t *event, void *user_data)
 {
-#if CONFIG_IDF_TARGET_ESP32S2
-    // if (GPSPI3.dma_int_st.out_eof)
-    {
-        // video_isr(((lldesc_t*)GPSPI3.dma_out_link.addr)->buf);
-        // video_isr(((lldesc_t*)GPSPI3.dma_out_eof_des_addr)->buf); // get the next line of video
-        // GPSPI3.dma_out_link.restart = 1;
+    if (_line_counter)
+        video_isr(vbuf);
+    return true;
+}
+static bool IRAM_ATTR  dac_on_convert_done_callback(dac_continuous_handle_t handle, const dac_event_data_t *event, void *user_data)
+{
+    QueueHandle_t que = (QueueHandle_t)user_data;
+    BaseType_t need_awoke;
+    /* When the queue is full, drop the oldest item */
+    if (xQueueIsQueueFullFromISR(que)) {
+        dac_event_data_t dummy;
+        xQueueReceiveFromISR(que, &dummy, &need_awoke);
     }
-    // GPSPI3.dma_int_clr.val = GPSPI3.dma_int_st.val;
-    // spi_dma_ll_tx_restart(&GPSPI3, 1);
-#else
-    if (I2S0.int_st.out_eof)
-        video_isr(((lldesc_t*)I2S0.out_eof_des_addr)->buf); // get the next line of video
-    I2S0.int_clr.val = I2S0.int_st.val;                     // reset the interrupt
-#endif
+    /* Send the event from callback */
+    xQueueSendFromISR(que, event, &need_awoke);
+    return need_awoke;
 }
 
-static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
+void video_init_hw(int line_width, int samples_per_cc)
 {
+    // setup apll 4x NTSC or PAL colorburst rate
+    // start_dma(line_width,samples_per_cc,1);
     rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
     // rclk.xtal_freq = 20;
     rclk.cpu_freq_mhz = 240;
     // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
     rtc_clk_init(rclk);
-    int freq = 0;
-#if CONFIG_IDF_TARGET_ESP32S2
+    int freq = 0;    
+
     dac_continuous_handle_t dac_handle;
     dac_continuous_config_t cont_cfg = {
         .chan_mask = DAC_CHANNEL_MASK_ALL,
@@ -86,7 +91,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
          */
         .chan_mode = DAC_CHANNEL_MODE_SIMUL,
     };
-   if (!_pal_) {
+    if (!_pal_) {
         switch (samples_per_cc) {
             case 3: 
                 // rtc_clk_apll_enable(false,13,181,255,31);   
@@ -105,87 +110,21 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     cont_cfg.freq_hz = freq;
     ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));    
     ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
-#else
-    periph_module_enable(PERIPH_I2S0_MODULE);
-
-    // setup interrupt
-    if (esp_intr_alloc(ETS_I2S0_INTR_SOURCE, ESP_INTR_FLAG_LEVEL1 | ESP_INTR_FLAG_IRAM,
-        i2s_intr_handler_video, 0, &_isr_handle) != ESP_OK)
-        return -1;
-
-    // reset conf
-    I2S0.conf.val = 1;
-    I2S0.conf.val = 0;
-    I2S0.conf.tx_right_first = 1;
-    I2S0.conf.tx_mono = (ch == 2 ? 0 : 1);
-
-    I2S0.conf2.lcd_en = 1;
-    I2S0.fifo_conf.tx_fifo_mod_force_en = 1;
-    I2S0.sample_rate_conf.tx_bits_mod = 16;
-    I2S0.conf_chan.tx_chan_mod = (ch == 2) ? 0 : 1;
-
-    // Create TX DMA buffers
-    for (int i = 0; i < 2; i++) {
-        int n = line_width*2*ch;
-        if (n >= 4092) {
-            printf("DMA chunk too big:%d\n",n);
-            return -1;
-        }
-        _dma_desc[i].buf = (uint8_t*)heap_caps_calloc(1, n, MALLOC_CAP_DMA);
-        if (!_dma_desc[i].buf)
-            return -1;
-
-        _dma_desc[i].owner = 1;
-        _dma_desc[i].eof = 1;
-        _dma_desc[i].length = n;
-        _dma_desc[i].size = n;
-        _dma_desc[i].empty = (uint32_t)(i == 1 ? _dma_desc : _dma_desc+1);
-    }
-    I2S0.out_link.addr = (uint32_t)_dma_desc;
-
-    //  Setup up the apll: See ref 3.2.7 Audio PLL
-    //  f_xtal = (int)rtc_clk_xtal_freq_get() * 1000000;
-    //  f_out = xtal_freq * (4 + sdm2 + sdm1/256 + sdm0/65536); // 250 < f_out < 500
-    //  apll_freq = f_out/((o_div + 2) * 2)
-    //  operating range of the f_out is 250 MHz ~ 500 MHz
-    //  operating range of the apll_freq is 16 ~ 128 MHz.
-    //  select sdm0,sdm1,sdm2 to produce nice multiples of colorburst frequencies
-
-    //  see calc_freq() for math: (4+a)*10/((2 + b)*2) mhz
-    //  up to 20mhz seems to work ok:
-    //  rtc_clk_apll_enable(1,0x00,0x00,0x4,0);   // 20mhz for fancy DDS
-
-    if (!_pal_) {
-        switch (samples_per_cc) {
-            case 3: rtc_clk_apll_enable(1,0x46,0x97,0x4,2);   break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
-            case 4: rtc_clk_apll_enable(1,0x46,0x97,0x4,1);   break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
-        }
-    } else {
-        rtc_clk_apll_enable(1,0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
-    }
-    I2S0.clkm_conf.clkm_div_num = 1;            // I2S clock divider’s integral value.
-    I2S0.clkm_conf.clkm_div_b = 0;              // Fractional clock divider’s numerator value.
-    I2S0.clkm_conf.clkm_div_a = 1;              // Fractional clock divider’s denominator value
-    I2S0.sample_rate_conf.tx_bck_div_num = 1;
-    I2S0.clkm_conf.clka_en = 1;                 // Set this bit to enable clk_apll.
-    I2S0.fifo_conf.tx_fifo_mod = (ch == 2) ? 0 : 1; // 32-bit dual or 16-bit single channel data
-
-    dac_output_enable(DAC_CHANNEL_1);           // DAC, video on GPIO25
-    dac_i2s_enable();                           // start DAC!
-
-    I2S0.conf.tx_start = 1;                     // start DMA!
-    I2S0.int_clr.val = 0xFFFFFFFF;
-    I2S0.int_ena.out_eof = 1;
-    I2S0.out_link.start = 1;
-#endif 
-    return esp_intr_enable(_isr_handle);        // start interruprs!
-}
-
-void video_init_hw(int line_width, int samples_per_cc)
-{
-    // setup apll 4x NTSC or PAL colorburst rate
-    start_dma(line_width,samples_per_cc,1);
-
+    int ch = 1;
+    int n = line_width*2*ch;
+    vbuf = (uint8_t*)heap_caps_calloc(1, n, MALLOC_CAP_DMA);
+    /* Create a queue to transport the interrupt event data */
+    QueueHandle_t que = xQueueCreate(10, sizeof(dac_event_data_t));
+    assert(que);
+    dac_event_callbacks_t cbs = {
+        .on_convert_done = dac_on_convert_done_callback,
+        .on_stop = dac_on_convert_stop_callback,
+    };
+    /* Must register the callback if using asynchronous writing */
+    ESP_ERROR_CHECK(dac_continuous_register_event_callback(dac_handle, &cbs, que));
+    /* Enable the continuous channels */
+    ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
+    ESP_LOGI(TAG, "DAC initialized success, DAC DMA is ready");    
     // Now ideally we would like to use the decoupled left DAC channel to produce audio
     // But when using the APLL there appears to be some clock domain conflict that causes
     // nasty digitial spikes and dropouts.
@@ -350,7 +289,7 @@ static TaskHandle_t _swapCompleteNotify;
 // Number of swaps completed
 static uint32_t _swap_counter = 0;
 
-volatile int _line_counter = 0;
+// volatile int _line_counter = 0;
 volatile uint32_t _frame_counter = 0;
 
 int _active_lines;
@@ -625,8 +564,12 @@ void IRAM_ATTR pal_sync(uint16_t* line, int i)
 // Wait for front and back buffers to swap before starting drawing
 void video_sync()
 {
-//   if (!_lines)
-//     return;
+    if (!_lines)
+        return;
+    // video_frame_out();
+    if (_line_counter == 0) {
+        video_isr(vbuf);
+    }
 //   spi_ll_usr_is_done(&GPSPI3);
 //   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }

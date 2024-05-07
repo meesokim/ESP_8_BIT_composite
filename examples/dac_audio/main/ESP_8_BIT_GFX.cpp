@@ -57,6 +57,7 @@ SOFTWARE.
 */
 
 #include "ESP_8_BIT_GFX.h"
+#include "esp_check.h"
 
 static const char *TAG = "ESP_8_BIT_GFX";
 
