@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "driver/dac_continuous.h"
+#include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_timer.h"
 
@@ -42,17 +43,33 @@ uint8_t colorCycle[] = {
     0xFF
 };
 
+#define GPIO_OUTPUT_IO_0    15
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0))
 // Create an instance of the graphics library
 ESP_8_BIT_GFX videoOut(false /* = NTSC */, 8 /* = RGB332 color */);
 
 void setup() {
-    // Initial setup of graphics library
+    //zero-initialize the config structure.
+    gpio_config_t io_conf = {};
+    //disable interrupt
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    //set as output mode
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    //bit mask of the pins that you want to set,e.g.GPIO18/19
+    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
+    //disable pull-down mode
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    //disable pull-up mode
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    //configure GPIO with the given settings
+    gpio_config(&io_conf);
+    gpio_set_level(GPIO_NUM_15, 0);
     videoOut.begin();
 }
 
 void loop() {
     // Wait for the next frame to minimize chance of visible tearing
-    videoOut.waitForFrame();
+    // videoOut.waitForFrame();
 
     // Get the current time and calculate a scaling factor
     unsigned long time = millis();
@@ -100,8 +117,10 @@ extern "C" void app_main() {
     ESP_LOGI(TAG, "DAC tvout start");
     ESP_LOGI(TAG, "--------------------------------------");
     setup();
-
+    int r = 0;
     while(true) {
         loop();
+        // vTaskDelay(1000 / portTICK_PERIOD_MS);
+        gpio_set_level(GPIO_NUM_15, r++%2);
     }
 }

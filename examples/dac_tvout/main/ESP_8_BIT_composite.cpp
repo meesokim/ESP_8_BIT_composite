@@ -87,9 +87,8 @@ void video_init_hw(int line_width, int samples_per_cc)
     // rclk.xtal_freq = 20;
     rclk.cpu_freq_mhz = 240;
     // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
-    rtc_clk_init(rclk);
+    // rtc_clk_init(rclk);
     int freq = 0;    
-    // dac_output_enable(DAC_CHAN_0);
     dac_continuous_config_t cont_cfg = {
         .chan_mask = DAC_CHANNEL_MASK_CH0,
         .desc_num = 4,
@@ -136,11 +135,11 @@ void video_init_hw(int line_width, int samples_per_cc)
         .on_convert_done = dac_on_convert_done_callback,
         .on_stop = dac_on_convert_stop_callback,
     };
-    /* Must register the callback if using asynchronous writing */
+    // /* Must register the callback if using asynchronous writing */
     ESP_ERROR_CHECK(dac_continuous_register_event_callback(dac_handle, &cbs, que));
-    /* Enable the continuous channels */
-    ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
-    ESP_LOGI(TAG, "DAC initialized success, DAC DMA is ready");    
+    // /* Enable the continuous channels */
+    // ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
+    // ESP_LOGI(TAG, "DAC initialized success, DAC DMA is ready");    
     // Now ideally we would like to use the decoupled left DAC channel to produce audio
     // But when using the APLL there appears to be some clock domain conflict that causes
     // nasty digitial spikes and dropouts.
