@@ -128,7 +128,7 @@ void video_init_hw(int line_width, int samples_per_cc)
     // vbuf = (uint8_t*)heap_caps_calloc(1, vbufsize, MALLOC_CAP_DMA);
     vbuf = (uint8_t*) malloc(vbufsize);
     /* Create a queue to transport the interrupt event data */
-    que = xQueueCreate(5, sizeof(dac_event_data_t));
+    que = xQueueCreate(10, sizeof(dac_event_data_t));
     assert(que);
     dac_event_callbacks_t cbs = {
         .on_convert_done = dac_on_convert_done_callback,
@@ -140,6 +140,7 @@ void video_init_hw(int line_width, int samples_per_cc)
     ESP_ERROR_CHECK(dac_continuous_register_event_callback(dac_handle, &cbs, que));
     // /* Enable the continuous channels */
     ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
+    ESP_ERROR_CHECK(dac_continuous_start_async_writing(dac_handle));
     // ESP_LOGI(TAG, "DAC initialized success, DAC DMA is ready");    
     // Now ideally we would like to use the decoupled left DAC channel to produce audio
     // But when using the APLL there appears to be some clock domain conflict that causes

@@ -120,7 +120,7 @@ extern "C" void app_main() {
     int r = 0;
     while(true) {
         loop();
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        // vTaskDelay(1000 / portTICK_PERIOD_MS);
         gpio_set_level(GPIO_NUM_15, r++%2);
     }
 }
