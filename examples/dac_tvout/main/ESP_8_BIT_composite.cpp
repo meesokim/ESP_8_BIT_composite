@@ -41,14 +41,14 @@ QueueHandle_t que;
 dac_continuous_handle_t dac_handle;
 
 extern "C"
-void IRAM_ATTR video_isr(uint8_t * buf);
+void IRAM_ATTR video_isr();
 uint8_t *vbuf;
 int vbufsize;
 
 static bool IRAM_ATTR  dac_on_convert_stop_callback(dac_continuous_handle_t handle, const dac_event_data_t *event, void *user_data)
 {
     if (_line_counter)
-        video_isr(vbuf);
+        video_isr();
     return true;
 }
 static bool IRAM_ATTR  dac_on_convert_done_callback(dac_continuous_handle_t handle, const dac_event_data_t *event, void *user_data)
@@ -83,29 +83,12 @@ void video_init_hw(int line_width, int samples_per_cc)
 {
     // setup apll 4x NTSC or PAL colorburst rate
     // start_dma(line_width,samples_per_cc,1);
-    rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
+    // rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
     // rclk.xtal_freq = 20;
-    rclk.cpu_freq_mhz = 240;
+    // rclk.cpu_freq_mhz = 240;
     // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
     // rtc_clk_init(rclk);
-    int freq = 0;    
-    dac_continuous_config_t cont_cfg = {
-        .chan_mask = DAC_CHANNEL_MASK_CH0,
-        .desc_num = 4,
-        .buf_size = 2048,
-        .freq_hz = CONFIG_EXAMPLE_AUDIO_SAMPLE_RATE,
-        .offset = 0,
-        .clk_src = DAC_DIGI_CLK_SRC_DEFAULT,   // Using APLL as clock source to get a wider frequency range
-        /* Assume the data in buffer is 'A B C D E F'
-         * DAC_CHANNEL_MODE_SIMUL:
-         *      - channel 0: A B C D E F
-         *      - channel 1: A B C D E F
-         * DAC_CHANNEL_MODE_ALTER:
-         *      - channel 0: A C E
-         *      - channel 1: B D F
-         */
-        .chan_mode = DAC_CHANNEL_MODE_SIMUL,
-    };
+    uint32_t freq = 0;    
     if (!_pal_) {
         switch (samples_per_cc) {
             case 3: 
@@ -121,24 +104,42 @@ void video_init_hw(int line_width, int samples_per_cc)
         // rtc_clk_apll_enable(false,25,167,10,31);     // 17.734476mhz ~4x PAL
         freq = 17734476;
     }
+    dac_continuous_config_t cont_cfg = {
+        .chan_mask = DAC_CHANNEL_MASK_CH0,
+        .desc_num = 5,
+        .buf_size = 2048,
+        .freq_hz = freq,
+        .offset = 0,
+        .clk_src = DAC_DIGI_CLK_SRC_APLL,   // Using APLL as clock source to get a wider frequency range
+        /* Assume the data in buffer is 'A B C D E F'
+         * DAC_CHANNEL_MODE_SIMUL:
+         *      - channel 0: A B C D E F
+         *      - channel 1: A B C D E F
+         * DAC_CHANNEL_MODE_ALTER:
+         *      - channel 0: A C E
+         *      - channel 1: B D F
+         */
+        .chan_mode = DAC_CHANNEL_MODE_SIMUL,
+    };
     /* Allocate continuous channels */
-    cont_cfg.freq_hz = freq;
-    ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));    
-    ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
+    // cont_cfg.freq_hz = freq;
     int ch = 1;
     vbufsize = line_width*2*ch;
-    vbuf = (uint8_t*)heap_caps_calloc(1, vbufsize, MALLOC_CAP_DMA);
+    // vbuf = (uint8_t*)heap_caps_calloc(1, vbufsize, MALLOC_CAP_DMA);
+    vbuf = (uint8_t*) malloc(vbufsize);
     /* Create a queue to transport the interrupt event data */
-    que = xQueueCreate(10, sizeof(dac_event_data_t));
+    que = xQueueCreate(5, sizeof(dac_event_data_t));
     assert(que);
     dac_event_callbacks_t cbs = {
         .on_convert_done = dac_on_convert_done_callback,
-        .on_stop = dac_on_convert_stop_callback,
+        .on_stop = NULL,
+        // .on_stop = dac_on_convert_stop_callback,
     };
+    ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));    
     // /* Must register the callback if using asynchronous writing */
     ESP_ERROR_CHECK(dac_continuous_register_event_callback(dac_handle, &cbs, que));
     // /* Enable the continuous channels */
-    // ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
+    ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
     // ESP_LOGI(TAG, "DAC initialized success, DAC DMA is ready");    
     // Now ideally we would like to use the decoupled left DAC channel to produce audio
     // But when using the APLL there appears to be some clock domain conflict that causes
@@ -581,17 +582,18 @@ void video_sync()
 {
     if (!_lines)
         return;
-    // video_frame_out();
+    // // video_frame_out();
     if (_line_counter == 0) {
-        video_isr(vbuf);
+        video_isr();
+        // while(_line_counter);
     }
 //   spi_ll_usr_is_done(&GPSPI3);
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 
 // Workhorse ISR handles audio and video updates
 extern "C"
-void video_isr(uint8_t * vbuf)
+void video_isr()
 {
     if (!_lines)
         return;
@@ -649,9 +651,9 @@ void video_isr(uint8_t * vbuf)
           _swap_counter++;
 
           // Signal video_sync() swap has completed
-            vTaskNotifyGiveFromISR(
-                _swapCompleteNotify,
-                NULL);
+            // vTaskNotifyGiveFromISR(
+            //     _swapCompleteNotify,
+            //     NULL);
         }
     }
     dac_write_data(vbuf, vbufsize);

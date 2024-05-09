@@ -69,11 +69,11 @@ void setup() {
 
 void loop() {
     // Wait for the next frame to minimize chance of visible tearing
-    // videoOut.waitForFrame();
+    videoOut.waitForFrame();
 
     // Get the current time and calculate a scaling factor
-    unsigned long time = millis();
-    float partial_second = (float)(time % 1000)/1000.0;
+    // unsigned long t = ;
+    float partial_second = (float)(millis() % 1000)/1000.0;
 
     // Use time scaling factor to calculate coordinates and colors
     uint8_t movingX = (uint8_t)(255*partial_second);
@@ -120,7 +120,7 @@ extern "C" void app_main() {
     int r = 0;
     while(true) {
         loop();
-        // vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
         gpio_set_level(GPIO_NUM_15, r++%2);
     }
 }
