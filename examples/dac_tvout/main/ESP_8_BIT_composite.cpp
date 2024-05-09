@@ -585,8 +585,10 @@ void video_sync()
         return;
     // // video_frame_out();
     if (_line_counter == 0) {
-        video_isr();
-        // while(_line_counter);
+        do {
+            video_isr();
+        }
+        while(_line_counter);
     }
 //   spi_ll_usr_is_done(&GPSPI3);
     // ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
