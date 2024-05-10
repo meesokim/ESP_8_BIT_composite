@@ -81,13 +81,6 @@ static void dac_write_data(uint8_t *data, size_t data_size)
 
 void video_init_hw(int line_width, int samples_per_cc)
 {
-    // setup apll 4x NTSC or PAL colorburst rate
-    // start_dma(line_width,samples_per_cc,1);
-    // rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
-    // rclk.xtal_freq = 20;
-    // rclk.cpu_freq_mhz = 240;
-    // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
-    // rtc_clk_init(rclk);
     uint32_t freq = 0;    
     if (!_pal_) {
         switch (samples_per_cc) {
@@ -122,18 +115,16 @@ void video_init_hw(int line_width, int samples_per_cc)
         .chan_mode = DAC_CHANNEL_MODE_SIMUL,
     };
     /* Allocate continuous channels */
-    // cont_cfg.freq_hz = freq;
     int ch = 1;
     vbufsize = line_width*2*ch;
-    // vbuf = (uint8_t*)heap_caps_calloc(1, vbufsize, MALLOC_CAP_DMA);
-    vbuf = (uint8_t*) malloc(vbufsize);
+    vbuf = (uint8_t*)heap_caps_calloc(1, vbufsize, MALLOC_CAP_DMA);
+    // vbuf = (uint8_t*) malloc(vbufsize);
     /* Create a queue to transport the interrupt event data */
     que = xQueueCreate(10, sizeof(dac_event_data_t));
     assert(que);
     dac_event_callbacks_t cbs = {
         .on_convert_done = dac_on_convert_done_callback,
-        .on_stop = NULL,
-        // .on_stop = dac_on_convert_stop_callback,
+        .on_stop = dac_on_convert_stop_callback,
     };
     ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));    
     // /* Must register the callback if using asynchronous writing */
@@ -585,13 +576,10 @@ void video_sync()
         return;
     // // video_frame_out();
     if (_line_counter == 0) {
-        do {
-            video_isr();
-        }
-        while(_line_counter);
+        video_isr();
     }
 //   spi_ll_usr_is_done(&GPSPI3);
-    // ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 
 // Workhorse ISR handles audio and video updates
@@ -654,9 +642,7 @@ void video_isr()
           _swap_counter++;
 
           // Signal video_sync() swap has completed
-            // vTaskNotifyGiveFromISR(
-            //     _swapCompleteNotify,
-            //     NULL);
+          vTaskNotifyGiveFromISR(_swapCompleteNotify,NULL);
         }
     }
     dac_write_data(vbuf, vbufsize);
