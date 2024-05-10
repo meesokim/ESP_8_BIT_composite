@@ -36,9 +36,9 @@ static int _pal_ = 0;
 
 // lldesc_t _dma_desc[2] = {0};
 intr_handle_t _isr_handle;
-int _line_counter = 0;
-QueueHandle_t que;
-dac_continuous_handle_t dac_handle;
+static int _line_counter = 0;
+static QueueHandle_t que;
+static dac_continuous_handle_t dac_handle;
 
 extern "C"
 void IRAM_ATTR video_isr();
@@ -47,9 +47,7 @@ int vbufsize;
 
 static bool IRAM_ATTR  dac_on_convert_stop_callback(dac_continuous_handle_t handle, const dac_event_data_t *event, void *user_data)
 {
-    if (_line_counter)
-        video_isr();
-    return true;
+    return false;
 }
 static bool IRAM_ATTR  dac_on_convert_done_callback(dac_continuous_handle_t handle, const dac_event_data_t *event, void *user_data)
 {
@@ -99,11 +97,11 @@ void video_init_hw(int line_width, int samples_per_cc)
     }
     dac_continuous_config_t cont_cfg = {
         .chan_mask = DAC_CHANNEL_MASK_CH0,
-        .desc_num = 5,
+        .desc_num = 10,
         .buf_size = 2048,
         .freq_hz = freq,
         .offset = 0,
-        .clk_src = DAC_DIGI_CLK_SRC_APLL,   // Using APLL as clock source to get a wider frequency range
+        .clk_src = DAC_DIGI_CLK_SRC_DEFAULT,   // Using APLL as clock source to get a wider frequency range
         /* Assume the data in buffer is 'A B C D E F'
          * DAC_CHANNEL_MODE_SIMUL:
          *      - channel 0: A B C D E F
@@ -253,7 +251,7 @@ const static DRAM_ATTR uint32_t pal_yuyv[] = {
 
 uint32_t cpu_ticks()
 {
-  return xthal_get_ccount();
+    return xthal_get_ccount();
 }
 
 uint32_t us() {
@@ -496,7 +494,6 @@ void IRAM_ATTR blit(uint8_t* src, uint16_t* dst)
         dst[0xb^1] = P3;
         dst += 12;
     }
-
     END_TIMING();
 }
 
@@ -576,10 +573,12 @@ void video_sync()
         return;
     // // video_frame_out();
     if (_line_counter == 0) {
-        video_isr();
+        do {
+            video_isr();
+        } while(_line_counter);
     }
 //   spi_ll_usr_is_done(&GPSPI3);
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    ulTaskNotifyTake(pdTRUE, 10);
 }
 
 // Workhorse ISR handles audio and video updates
