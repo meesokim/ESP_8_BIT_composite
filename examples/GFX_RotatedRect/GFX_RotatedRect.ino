@@ -40,12 +40,14 @@ uint8_t currentState;
 uint8_t delta;
 
 // Create an instance of the graphics library
-ESP_8_BIT_GFX videoOut(true /* = NTSC */, 8 /* = RGB332 color */);
+ESP_8_BIT_GFX videoOut(true /* = NTSC */, 16 /* = RGB332 color */);
 
 void setup() {
   // put your setup code here, to run once:
   videoOut.begin();
-
+  videoOut.copyAfterSwap = true; // gif library depends on data from previous buffer
+  videoOut.fillScreen(0);
+  videoOut.waitForFrame();
   currentState = 0;
   fractionSecond = millis()%1000;
   delta = 0;

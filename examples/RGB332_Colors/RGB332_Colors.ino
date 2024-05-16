@@ -57,9 +57,8 @@ void setup() {
       frameBufferLines[y][x] = redChannel | x >> 3;
     }
   }
-
-  videoOut.waitForFrame();
 }
 
 void loop() {
+  videoOut.waitForFrame();
 }

@@ -31,10 +31,421 @@ static int _pal_ = 0;
 //
 // low level HW setup of DAC/DMA/APLL/PWM
 //
-
+#include "clk_ctrl_os.h"
 lldesc_t _dma_desc[2] = {0};
 intr_handle_t _isr_handle;
 
+#ifdef CONFIG_IDF_TARGET_ESP32S2
+// Naming convention: SOC_MOD_CLK_{[upstream]clock_name}_[attr]
+// {[upstream]clock_name}: APB, APLL, (BB)PLL, etc.
+// [attr] - optional: FAST, SLOW, D<divider>, F<freq>
+/**
+ * @brief Supported clock sources for modules (CPU, peripherals, RTC, etc.)
+ *
+ * @note enum starts from 1, to save 0 for special purpose
+ */
+typedef enum {
+    // For CPU domain
+    SOC_MOD_CLK_CPU = 1,                       /*!< CPU_CLK can be sourced from XTAL, PLL, RC_FAST, or APLL by configuring soc_cpu_clk_src_t */
+    // For RTC domain
+    SOC_MOD_CLK_RTC_FAST,                      /*!< RTC_FAST_CLK can be sourced from XTAL_D4 or RC_FAST by configuring soc_rtc_fast_clk_src_t */
+    SOC_MOD_CLK_RTC_SLOW,                      /*!< RTC_SLOW_CLK can be sourced from RC_SLOW, XTAL32K, or RC_FAST_D256 by configuring soc_rtc_slow_clk_src_t */
+    // For digital domain: peripherals, WIFI, BLE
+    SOC_MOD_CLK_APB,                           /*!< APB_CLK is highly dependent on the CPU_CLK source */
+    SOC_MOD_CLK_PLL_D2,                        /*!< PLL_D2_CLK is derived from PLL, it has a fixed divider of 2 */
+    SOC_MOD_CLK_PLL_F160M,                     /*!< PLL_F160M_CLK is derived from PLL, and has a fixed frequency of 160MHz */
+    SOC_MOD_CLK_XTAL32K,                       /*!< XTAL32K_CLK comes from the external 32kHz crystal, passing a clock gating to the peripherals */
+    SOC_MOD_CLK_RC_FAST,                       /*!< RC_FAST_CLK comes from the internal 8MHz rc oscillator, passing a clock gating to the peripherals */
+    SOC_MOD_CLK_RC_FAST_D256,                  /*!< RC_FAST_D256_CLK comes from the internal 8MHz rc oscillator, divided by 256, and passing a clock gating to the peripherals */
+    SOC_MOD_CLK_XTAL,                          /*!< XTAL_CLK comes from the external crystal (2~40MHz) */
+    SOC_MOD_CLK_REF_TICK,                      /*!< REF_TICK is derived from APB, it has a fixed frequency of 1MHz even when APB frequency changes */
+    SOC_MOD_CLK_APLL,                          /*!< APLL is sourced from PLL, and its frequency is configurable through APLL configuration registers */
+    SOC_MOD_CLK_INVALID,                       /*!< Indication of the end of the available module clock sources */
+} soc_module_clk_t;
+
+/**
+ * @brief Integer division operation
+ *
+ */
+typedef enum {
+    HAL_DIV_ROUND_DOWN,     /*!< Round the division down to the floor integer */
+    HAL_DIV_ROUND_UP,       /*!< Round the division up to the ceiling integer */
+    HAL_DIV_ROUND,          /*!< Round the division to the nearest integer (round up if fraction >= 1/2, round down if fraction < 1/2) */
+} hal_utils_div_round_opt_t;
+
+/**
+ * @brief Clock information
+ *
+ */
+typedef struct {
+    uint32_t src_freq_hz;   /*!< Source clock frequency, unit: Hz */
+    uint32_t exp_freq_hz;   /*!< Expected output clock frequency, unit: Hz */
+    uint32_t max_integ;     /*!< The max value of the integral part */
+    uint32_t min_integ;     /*!< The min value of the integral part, integer range: [min_integ, max_integ) */
+    union {
+        uint32_t max_fract;     /*!< The max value of the denominator and numerator, numerator range: [0, max_fract), denominator range: [1, max_fract)
+                                 *   Please make sure max_fract > 2 when calculate the division with fractal part */
+        hal_utils_div_round_opt_t round_opt;     /*!< Integer division operation. For the case that doesn't have fractal part, set this field to the to specify the rounding method  */
+    };
+} hal_utils_clk_info_t;
+
+/**
+ * @brief Members of clock division
+ *
+ */
+typedef struct {
+    uint32_t integer;       /*!< Integer part of division */
+    uint32_t denominator;   /*!< Denominator part of division */
+    uint32_t numerator;     /*!< Numerator part of division */
+} hal_utils_clk_div_t;
+
+/**
+ * @brief Calculate the clock division with fractal part accurately
+ * @note  Accuracy first algorithm, Time complexity O(n).
+ *        About 1~hundreds times more accurate than the fast algorithm
+ *
+ * @param[in]  clk_info     The clock information
+ * @param[out] clk_div      The clock division with integral and fractal part
+ * @return
+ *      - 0: Failed to get the result because the division is out of range
+ *      - others: The real output clock frequency
+ */
+// uint32_t hal_utils_calc_clk_div_frac_accurate(const hal_utils_clk_info_t *clk_info, hal_utils_clk_div_t *clk_div);
+typedef enum {
+    ADC_DIGI_CLK_SRC_PLL_F160M = SOC_MOD_CLK_PLL_F160M, /*!< Select F160M as the source clock */
+    ADC_DIGI_CLK_SRC_APLL = SOC_MOD_CLK_APLL,           /*!< Select APLL as the source clock */
+    ADC_DIGI_CLK_SRC_DEFAULT = SOC_MOD_CLK_PLL_F160M,   /*!< Select F160M as the default clock choice */
+} soc_periph_adc_digi_clk_src_t;
+
+__attribute__((always_inline))
+static inline uint32_t _sub_abs(uint32_t a, uint32_t b)
+{
+    return a > b ? a - b : b - a;
+}
+
+uint32_t hal_utils_calc_clk_div_frac_accurate(const hal_utils_clk_info_t *clk_info, hal_utils_clk_div_t *clk_div)
+{
+    HAL_ASSERT(clk_info->max_fract > 2);
+    uint32_t div_denom = 2;
+    uint32_t div_numer = 0;
+    uint32_t div_integ = clk_info->src_freq_hz / clk_info->exp_freq_hz;
+    uint32_t freq_error = clk_info->src_freq_hz % clk_info->exp_freq_hz;
+
+    if (freq_error) {
+        // Carry bit if the decimal is greater than 1.0 - 1.0 / ((max_fract - 1) * 2)
+        if (freq_error < clk_info->exp_freq_hz - clk_info->exp_freq_hz / (clk_info->max_fract - 1) * 2) {
+            // Search the closest fraction, time complexity O(n)
+            for (uint32_t sub = 0, a = 2, b = 0, min = UINT32_MAX; min && a < clk_info->max_fract; a++) {
+                b = (a * freq_error + clk_info->exp_freq_hz / 2) / clk_info->exp_freq_hz;
+                sub = _sub_abs(clk_info->exp_freq_hz * b, freq_error * a);
+                if (sub < min) {
+                    div_denom = a;
+                    div_numer = b;
+                    min = sub;
+                }
+            }
+        } else {
+            div_integ++;
+        }
+    }
+
+    // If the expect frequency is too high or too low to satisfy the integral division range, failed and return 0
+    if (div_integ < clk_info->min_integ || div_integ >= clk_info->max_integ || div_integ == 0) {
+        return 0;
+    }
+
+    // Assign result
+    clk_div->integer     = div_integ;
+    clk_div->denominator = div_denom;
+    clk_div->numerator   = div_numer;
+
+    // Return the actual frequency
+    if (div_numer) {
+        uint32_t temp = div_integ * div_denom + div_numer;
+        return (uint32_t)(((uint64_t)clk_info->src_freq_hz * div_denom + temp / 2) / temp);
+    }
+    return clk_info->src_freq_hz / div_integ;
+}
+
+static portMUX_TYPE periph_spinlock = portMUX_INITIALIZER_UNLOCKED;
+/* APLL output frequency range */
+#define CLK_LL_APLL_MIN_HZ    (5303031)   // 5.303031 MHz, refer to 'periph_rtc_apll_freq_set' for the calculation
+#define CLK_LL_APLL_MAX_HZ    (125000000) // 125MHz, refer to 'periph_rtc_apll_freq_set' for the calculation
+
+#define  APB_CLK_FREQ                                ( 80*1000000 )       //unit: Hz
+// static const char *TAG = "DAC_DMA";
+
+/* APLL configuration parameters */
+#define CLK_LL_APLL_SDM_STOP_VAL_1         0x09
+#define CLK_LL_APLL_SDM_STOP_VAL_2_REV0    0x69
+#define CLK_LL_APLL_SDM_STOP_VAL_2_REV1    0x49
+
+/* APLL calibration parameters */
+#define CLK_LL_APLL_CAL_DELAY_1            0x0f
+#define CLK_LL_APLL_CAL_DELAY_2            0x3f
+#define CLK_LL_APLL_CAL_DELAY_3            0x1f
+
+/* APLL multiplier output frequency range */
+// apll_multiplier_out = xtal_freq * (4 + sdm2 + sdm1/256 + sdm0/65536)
+#define CLK_LL_APLL_MULTIPLIER_MIN_HZ (350000000) // 350 MHz
+#define CLK_LL_APLL_MULTIPLIER_MAX_HZ (500000000) // 500 MHz
+
+#define I2C_APLL            0X6D
+#define I2C_APLL_HOSTID     1
+
+#define I2C_APLL_IR_CAL_DELAY        0
+#define I2C_APLL_IR_CAL_DELAY_MSB    3
+#define I2C_APLL_IR_CAL_DELAY_LSB    0
+
+#define I2C_APLL_SDM_STOP        5
+#define I2C_APLL_SDM_STOP_MSB    5
+#define I2C_APLL_SDM_STOP_LSB    5
+
+#define I2C_APLL_DSDM2        7
+#define I2C_APLL_DSDM2_MSB    5
+#define I2C_APLL_DSDM2_LSB    0
+
+#define I2C_APLL_DSDM1        8
+#define I2C_APLL_DSDM1_MSB    7
+#define I2C_APLL_DSDM1_LSB    0
+
+#define I2C_APLL_DSDM0        9
+#define I2C_APLL_DSDM0_MSB    7
+#define I2C_APLL_DSDM0_LSB    0
+
+#define I2C_APLL_OR_OUTPUT_DIV        4
+#define I2C_APLL_OR_OUTPUT_DIV_MSB    4
+#define I2C_APLL_OR_OUTPUT_DIV_LSB    0
+
+#define I2C_APLL_OR_CAL_END        3
+#define I2C_APLL_OR_CAL_END_MSB    7
+#define I2C_APLL_OR_CAL_END_LSB    7
+
+/**
+ * @brief Check whether APLL calibration is done
+ *
+ * @return True if calibration is done; otherwise false
+ */
+static inline __attribute__((always_inline)) bool clk_ll_apll_calibration_is_done(void)
+{
+    return REGI2C_READ_MASK(I2C_APLL, I2C_APLL_OR_CAL_END);
+}
+
+/**
+ * @brief Set APLL calibration parameters
+ */
+static inline __attribute__((always_inline)) void clk_ll_apll_set_calibration(void)
+{
+    REGI2C_WRITE(I2C_APLL, I2C_APLL_IR_CAL_DELAY, CLK_LL_APLL_CAL_DELAY_1);
+    REGI2C_WRITE(I2C_APLL, I2C_APLL_IR_CAL_DELAY, CLK_LL_APLL_CAL_DELAY_2);
+    REGI2C_WRITE(I2C_APLL, I2C_APLL_IR_CAL_DELAY, CLK_LL_APLL_CAL_DELAY_3);
+}
+
+
+/**
+ * @brief Set APLL configuration
+ *
+ * @param o_div  Frequency divider, 0..31
+ * @param sdm0  Frequency adjustment parameter, 0..255
+ * @param sdm1  Frequency adjustment parameter, 0..255
+ * @param sdm2  Frequency adjustment parameter, 0..63
+ */
+static inline __attribute__((always_inline)) void clk_ll_apll_set_config(uint32_t o_div, uint32_t sdm0, uint32_t sdm1, uint32_t sdm2)
+{
+    REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_DSDM2, sdm2);
+    REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_DSDM0, sdm0);
+    REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_DSDM1, sdm1);
+    REGI2C_WRITE(I2C_APLL, I2C_APLL_SDM_STOP, CLK_LL_APLL_SDM_STOP_VAL_1);
+    REGI2C_WRITE(I2C_APLL, I2C_APLL_SDM_STOP, CLK_LL_APLL_SDM_STOP_VAL_2_REV1);
+    REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_OR_OUTPUT_DIV, o_div);
+}
+
+static uint32_t s_cur_apll_freq = 0;
+static int s_apll_ref_cnt = 0;
+
+uint32_t rtc_clk_apll_coeff_calc(uint32_t freq, uint32_t *_o_div, uint32_t *_sdm0, uint32_t *_sdm1, uint32_t *_sdm2)
+{
+    uint32_t rtc_xtal_freq = (uint32_t)rtc_clk_xtal_freq_get();
+    if (rtc_xtal_freq == 0) {
+        // xtal_freq has not set yet
+        // ESP_HW_LOGE(TAG, "Get xtal clock frequency failed, it has not been set yet");
+        abort();
+    }
+    /* Reference formula: apll_freq = xtal_freq * (4 + sdm2 + sdm1/256 + sdm0/65536) / ((o_div + 2) * 2)
+     *                                ----------------------------------------------   -----------------
+     *                                     350 MHz <= Numerator <= 500 MHz                Denominator
+     */
+    int o_div = 0; // range: 0~31
+    int sdm0 = 0;  // range: 0~255
+    int sdm1 = 0;  // range: 0~255
+    int sdm2 = 0;  // range: 0~63
+    /* Firstly try to satisfy the condition that the operation frequency of numerator should be greater than 350 MHz,
+     * i.e. xtal_freq * (4 + sdm2 + sdm1/256 + sdm0/65536) >= 350 MHz, '+1' in the following code is to get the ceil value.
+     * With this condition, as we know the 'o_div' can't be greater than 31, then we can calculate the APLL minimum support frequency is
+     * 350 MHz / ((31 + 2) * 2) = 5303031 Hz (for ceil) */
+    o_div = (int)(CLK_LL_APLL_MULTIPLIER_MIN_HZ / (float)(freq * 2) + 1) - 2;
+    if (o_div > 31) {
+        // ESP_HW_LOGE(TAG, "Expected frequency is too small");
+        return 0;
+    }
+    if (o_div < 0) {
+        /* Try to satisfy the condition that the operation frequency of numerator should be smaller than 500 MHz,
+         * i.e. xtal_freq * (4 + sdm2 + sdm1/256 + sdm0/65536) <= 500 MHz, we need to get the floor value in the following code.
+         * With this condition, as we know the 'o_div' can't be smaller than 0, then we can calculate the APLL maximum support frequency is
+         * 500 MHz / ((0 + 2) * 2) = 125000000 Hz */
+        o_div = (int)(CLK_LL_APLL_MULTIPLIER_MAX_HZ / (float)(freq * 2)) - 2;
+        if (o_div < 0) {
+            // ESP_HW_LOGE(TAG, "Expected frequency is too big");
+            return 0;
+        }
+    }
+    // sdm2 = (int)(((o_div + 2) * 2) * apll_freq / xtal_freq) - 4
+    sdm2 = (int)(((o_div + 2) * 2 * freq) / (rtc_xtal_freq * MHZ)) - 4;
+    // numrator = (((o_div + 2) * 2) * apll_freq / xtal_freq) - 4 - sdm2
+    float numrator = (((o_div + 2) * 2 * freq) / ((float)rtc_xtal_freq * MHZ)) - 4 - sdm2;
+    // If numrator is bigger than 255/256 + 255/65536 + (1/65536)/2 = 1 - (1 / 65536)/2, carry bit to sdm2
+    if (numrator > 1.0 - (1.0 / 65536.0) / 2.0) {
+        sdm2++;
+    }
+    // If numrator is smaller than (1/65536)/2, keep sdm0 = sdm1 = 0, otherwise calculate sdm0 and sdm1
+    else if (numrator > (1.0 / 65536.0) / 2.0) {
+        // Get the closest sdm1
+        sdm1 = (int)(numrator * 65536.0 + 0.5) / 256;
+        // Get the closest sdm0
+        sdm0 = (int)(numrator * 65536.0 + 0.5) % 256;
+    }
+    uint32_t real_freq = (uint32_t)(rtc_xtal_freq * MHZ * (4 + sdm2 + (float)sdm1/256.0 + (float)sdm0/65536.0) / (((float)o_div + 2) * 2));
+    *_o_div = o_div;
+    *_sdm0 = sdm0;
+    *_sdm1 = sdm1;
+    *_sdm2 = sdm2;
+    return real_freq;
+}
+
+void rtc_clk_apll_coeff_set(uint32_t o_div, uint32_t sdm0, uint32_t sdm1, uint32_t sdm2)
+{
+    clk_ll_apll_set_config(o_div, sdm0, sdm1, sdm2);
+
+    /* calibration */
+    clk_ll_apll_set_calibration();
+
+    /* wait for calibration end */
+    while (!clk_ll_apll_calibration_is_done()) {
+        /* use esp_rom_delay_us so the RTC bus doesn't get flooded */
+        esp_rom_delay_us(1);
+    }
+}
+
+esp_err_t periph_rtc_apll_freq_set(uint32_t expt_freq, uint32_t *real_freq)
+{
+    uint32_t o_div = 0;
+    uint32_t sdm0 = 0;
+    uint32_t sdm1 = 0;
+    uint32_t sdm2 = 0;
+    // Guarantee 'periph_rtc_apll_acquire' has been called before set apll freq
+    assert(s_apll_ref_cnt > 0);
+    uint32_t apll_freq = rtc_clk_apll_coeff_calc(expt_freq, &o_div, &sdm0, &sdm1, &sdm2);
+
+    // ESP_RETURN_ON_FALSE(apll_freq, ESP_ERR_INVALID_ARG, TAG, "APLL coefficients calculate failed");
+    bool need_config = true;
+    portENTER_CRITICAL(&periph_spinlock);
+    /* If APLL is not in use or only one peripheral in use, its frequency can be changed as will
+     * But when more than one peripheral refers APLL, its frequency is not allowed to change once it is set */
+    if (s_cur_apll_freq == 0 || s_apll_ref_cnt < 2) {
+        s_cur_apll_freq = apll_freq;
+    } else {
+        apll_freq = s_cur_apll_freq;
+        need_config = false;
+    }
+    portEXIT_CRITICAL(&periph_spinlock);
+    *real_freq = apll_freq;
+
+    if (need_config) {
+        ESP_LOGD(TAG, "APLL will working at %"PRIu32" Hz with coefficients [sdm0] %"PRIu32" [sdm1] %"PRIu32" [sdm2] %"PRIu32" [o_div] %"PRIu32"",
+                 apll_freq, sdm0, sdm1, sdm2, o_div);
+        /* Set coefficients for APLL, notice that it doesn't mean APLL will start */
+        rtc_clk_apll_coeff_set(o_div, sdm0, sdm1, sdm2);
+    } else {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    return ESP_OK;
+}
+
+static uint32_t s_dac_set_apll_freq(uint32_t expt_freq)
+{
+    /* Set APLL coefficients to the given frequency */
+    uint32_t real_freq = 0;
+    esp_err_t ret = periph_rtc_apll_freq_set(expt_freq, &real_freq);
+    if (ret == ESP_ERR_INVALID_ARG) {
+        return 0;
+    }
+    if (ret == ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "APLL is occupied already, it is working at %"PRIu32" Hz", real_freq);
+    }
+    ESP_LOGD(TAG, "APLL expected frequency is %"PRIu32" Hz, real frequency is %"PRIu32" Hz", expt_freq, real_freq);
+    return real_freq;
+}
+/**
+ * @brief Calculate and set DAC data frequency
+ * @note  DAC clock shares clock divider with ADC, the clock source is APB or APLL on ESP32-S2
+ *        freq_hz = (source_clk / (clk_div + (b / a) + 1)) / interval
+ *        interval range: 1~4095
+ * @param freq_hz    DAC byte transmit frequency
+ * @return
+ *      - ESP_OK    config success
+ *      - ESP_ERR_INVALID_ARG   invalid frequency
+ */
+esp_err_t dac_dma_periph_init(int freq_hz, bool is_apll)
+{
+    /* Step 1: Determine the digital clock source frequency */
+    uint32_t digi_ctrl_freq; // Digital controller clock
+    if (is_apll) {
+        /* Theoretical frequency range (due to the limitation of DAC, the maximum frequency may not reach):
+         * CLK_LL_APLL_MAX_HZ: 119.24 Hz ~ 67.5 MHz
+         * CLK_LL_APLL_MIN_HZ: 5.06 Hz ~ 2.65 MHz */
+        digi_ctrl_freq = s_dac_set_apll_freq(freq_hz < 120 ? CLK_LL_APLL_MIN_HZ : CLK_LL_APLL_MAX_HZ);
+        // ESP_RETURN_ON_FALSE(digi_ctrl_freq, ESP_ERR_INVALID_ARG, TAG, "set APLL coefficients failed");
+    } else {
+        digi_ctrl_freq = APB_CLK_FREQ;
+    }
+
+    /* Step 2: Determine the interval */
+    uint32_t total_div = digi_ctrl_freq / freq_hz;
+    uint32_t interval;
+    /* For the case that smaller than the minimum ADC controller division, the required frequency is too big */
+    // ESP_RETURN_ON_FALSE(total_div >= 2, ESP_ERR_INVALID_ARG, TAG, "the DAC frequency is too big");
+    if (total_div < 256) { // For the case that smaller than the maximum ADC controller division
+        /* Fix the interval to 1, the division is fully realized by the ADC controller clock divider */
+        interval = 1;
+    } else if (total_div < 8192) { // for the case that smaller than the maximum interval
+        /* Set the interval to 'total_div / 2', fix the integer part of ADC controller clock division to 2 */
+        interval = total_div / 2;
+    } else {
+        /* Fix the interval to 4095, */
+        interval = 4095;
+    }
+    // ESP_RETURN_ON_FALSE(interval * 256 > total_div, ESP_ERR_INVALID_ARG, TAG, "the DAC frequency is too small");
+
+    /* Step 3: Calculate the coefficients of ADC digital controller divider */
+    hal_utils_clk_info_t adc_clk_info = {
+        .src_freq_hz = digi_ctrl_freq / interval,
+        .exp_freq_hz = freq_hz,
+        .max_integ = 257,
+        .min_integ = 1,
+        .max_fract = 64,
+    };
+    hal_utils_clk_div_t adc_clk_div = {};
+    hal_utils_calc_clk_div_frac_accurate(&adc_clk_info, &adc_clk_div);
+
+    /* Step 4: Set the clock coefficients */
+    dac_ll_digi_clk_inv(true);
+    dac_ll_digi_set_trigger_interval(interval); // secondary clock division
+    adc_ll_digi_controller_clk_div(adc_clk_div.integer - 1, adc_clk_div.denominator, adc_clk_div.numerator);
+    // adc_ll_digi_clk_sel(is_apll ? ADC_DIGI_CLK_SRC_APLL : ADC_DIGI_CLK_SRC_DEFAULT);
+    return ESP_OK;    
+}
+#endif
 extern "C"
 void IRAM_ATTR video_isr(const volatile void* buf);
 
@@ -43,13 +454,8 @@ void IRAM_ATTR i2s_intr_handler_video(void *arg)
 {
 #if CONFIG_IDF_TARGET_ESP32S2
     if (GPSPI3.dma_int_st.out_eof)
-    {
-        // video_isr(((lldesc_t*)GPSPI3.dma_out_link.addr)->buf);
         video_isr(((lldesc_t*)GPSPI3.dma_out_eof_des_addr)->buf); // get the next line of video
-        GPSPI3.dma_out_link.restart = 1;
-    }
     GPSPI3.dma_int_clr.val = GPSPI3.dma_int_st.val;
-    spi_dma_ll_tx_restart(&GPSPI3, 1);
 #else
     if (I2S0.int_st.out_eof)
         video_isr(((lldesc_t*)I2S0.out_eof_des_addr)->buf); // get the next line of video
@@ -65,7 +471,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
     rtc_clk_init(rclk);
 
-#if CONFIG_IDF_TARGET_ESP32S2
+#ifdef CONFIG_IDF_TARGET_ESP32S2
     uint32_t int_mask = SPI_OUT_EOF_INT_ENA;
     periph_module_enable(PERIPH_SPI3_DMA_MODULE);
     periph_module_enable(PERIPH_SARADC_MODULE);
@@ -75,11 +481,11 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     REG_CLR_BIT(DPORT_PERIP_RST_EN_REG, DPORT_APB_SARADC_RST_M);
     REG_CLR_BIT(DPORT_PERIP_RST_EN_REG, DPORT_SPI3_DMA_RST_M);
     REG_CLR_BIT(DPORT_PERIP_RST_EN_REG, DPORT_SPI3_RST_M);
-    REG_WRITE(SPI_DMA_INT_CLR_REG(3), 0xFFFFFFFF);
+    // REG_WRITE(SPI_DMA_INT_CLR_REG(3), 0xFFFFFFFF);
     REG_WRITE(SPI_DMA_INT_ENA_REG(3), int_mask | REG_READ(SPI_DMA_INT_ENA_REG(3)));
-    // REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
-    // REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);
-    // adc_ll_digi_clk_sel(true);
+    REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
+    REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);
+    adc_ll_digi_clk_sel(true);
     dac_output_enable(DAC_CHANNEL_1);
     /* Acquire DMA peripheral */
     // dac_output_enable(DAC_CHANNEL_2);
@@ -102,24 +508,23 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
         _dma_desc[i].length = n;
         _dma_desc[i].size = n;
         _dma_desc[i].empty = (uint32_t)(i == 1 ? _dma_desc : _dma_desc+1);
-        // _dma_desc[i].empty = 0;
     }
     // GPSPI3.dma_conf.out_eof_mode = 0;
     // GPSPI3.dma_out_link.addr = (uint32_t)_dma_desc;
     // GPSPI3.dma_int_clr.val = 0xFFFFFFFF;
     // GPSPI3.dma_int_ena.out_eof = 1;
-    // REG_SET_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_AHBM_FIFO_RST | SPI_AHBM_RST);
-    // REG_CLR_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_AHBM_FIFO_RST | SPI_AHBM_RST);
-    // SET_PERI_REG_BITS(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_ADDR, (uint32_t)_dma_desc, 0);
+    REG_SET_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_AHBM_FIFO_RST | SPI_AHBM_RST);
+    REG_CLR_BIT(SPI_DMA_CONF_REG(3), SPI_OUT_RST | SPI_AHBM_FIFO_RST | SPI_AHBM_RST);
+    SET_PERI_REG_BITS(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_ADDR, (uint32_t)_dma_desc, 0);
     // REG_CLR_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_STOP);
     // REG_SET_BIT(SPI_DMA_OUT_LINK_REG(3), SPI_OUTLINK_START);    
     // spi_ll_enable_bus_clock(SPI3_HOST, true);
-    // dac_ll_power_on(DAC_CHANNEL_1);
+    dac_ll_power_on(DAC_CHANNEL_1);
     // spi_ll_master_init(&GPSPI3);
     // spi_ll_enable_intr(&GPSPI3, (spi_ll_intr_t) (SPI_LL_INTR_TRANS_DONE));
     // dac_ll_digi_set_convert_mode(DAC_CONV_NORMAL);
-    // dac_ll_rtc_reset(); 
-    // adc_ll_digi_controller_clk_div(0, 0, 0);
+    dac_ll_rtc_reset(); 
+    adc_ll_digi_controller_clk_div(0, 0, 0);
 
     //  Setup up the apll: See ref 3.2.7 Audio PLL
     //  f_xtal = (int)rtc_clk_xtal_freq_get() * 1000000;
@@ -133,47 +538,56 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     //  up to 20mhz seems to work ok:
     //  rtc_clk_apll_enable(1,0x00,0x00,0x4,0);   // 20mhz for fancy DDS
 
-    // rtc_clk_8m_enable(true, true);
+    rtc_clk_8m_enable(true, true);
     dac_digi_config_t conf;
     conf.mode = DAC_CONV_NORMAL;
     conf.interval = 0;
     adc_digi_clk_t adclk;
     adclk.use_apll = false;
-    adclk.div_num = 2;
+    adclk.div_num = 1;
     adclk.div_a = 0;
     adclk.div_b = 1;
     conf.dig_clk = adclk;
-    spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
-    spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
-    spi_dma_ll_set_out_eof_generation(&GPSPI3, 1, true);
-    // spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, true);
+    // spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
+    // spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
+    // spi_dma_ll_set_out_eof_generation(&GPSPI3, 1, true);
+    spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, true);
     spi_dma_ll_tx_start(&GPSPI3, 1, (lldesc_t *)_dma_desc);
-    // dac_ll_digi_clk_inv(false);
+    // dac_ll_digi_clk_inv(true);
     // *portOutputRegister(0)=1;
     // int a = *portInputRegister(0);
-    // dac_hal_digi_controller_config(&conf);
-    adc_ll_digi_controller_clk_div(1, 0, 1);
-    if (!_pal_) {
-        switch (samples_per_cc) {
-            case 3: 
-                // adc_ll_digi_controller_clk_div(5, 63, 43);
-                rtc_clk_apll_enable(false,13,181,255,31);   
-                break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
-            case 4: rtc_clk_apll_enable(true,19,160,0,31);   
-                break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
-        }
-    } else {
-        rtc_clk_apll_enable(false,25,167,10,31);     // 17.734476mhz ~4x PAL
-        adc_ll_digi_controller_clk_div(0, 10, 1);
-    }
-    // dac_hal_digi_enable_dma(true);
-    // dac_ll_digi_set_trigger_interval(10);
-    // rtc_clk_apb_freq_update(78000000);
+    dac_hal_digi_controller_config(&conf);
+    // dac_ll_digi_set_convert_mode(conf.mode);
+    // adc_ll_digi_controller_clk_div(1, 0, 3);
+    dac_hal_rtc_sync_by_adc(true);
+    // dac_ll_digi_set_trigger_interval(0);
+    // if (!_pal_) {
+    //     switch (samples_per_cc) {
+    //         case 3: 
+    //             // adc_ll_digi_controller_clk_div(5, 63, 43);
+    //             // rtc_clk_apll_enable(false,13,181,255,31);   
+    //             // dac_dma_periph_init(10738636, true);
+    //             rtc_clk_apll_enable(1,0x46,0x97,0x4,2);  
+    //             break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
+    //         case 4: 
+    //             // rtc_clk_apll_enable(true,120,160,0,31);   
+    //             // dac_dma_periph_init(14318181, true);
+    //             rtc_clk_apll_enable(1,0x46,0x97,0x4,1);  
+    //             break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
+    //     }
+    // } else {
+    //     rtc_clk_apll_enable(1,0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
+    //     // rtc_clk_apll_enable(false,25,167,10,31);     // 17.734476mhz ~4x PAL
+    //     // dac_dma_periph_init(17734476, true);
+    //     // rtc_clk_apll_enable(1,0x043,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
+    //     // adc_ll_digi_controller_clk_div(0, 10, 1);
+    // }
+    // // dac_hal_digi_enable_dma(true);
+    dac_ll_digi_set_trigger_interval(0);
+    // adc_ll_digi_controller_clk_div(1, 0, 1);
+    // rtc_clk_apb_freq_update(250000000);
     // APB_SARADC.apb_adc_clkm_conf.clk_en = true;
-    // dac_hal_rtc_sync_by_adc(true);
-    dac_ll_digi_set_convert_mode(conf.mode);
-    dac_ll_digi_set_trigger_interval(1);
-    dac_ll_digi_trigger_output(true);
+    // dac_ll_digi_trigger_output(true);
     // APB_SARADC.apb_dac_ctrl.dac_timer_target = 2;
     // APB_SARADC.apb_dac_ctrl.dac_timer_en = true;
     // APB_SARADC.apb_adc_arb_ctrl.adc_arb_apb_force = true;
@@ -721,10 +1135,9 @@ void IRAM_ATTR pal_sync(uint16_t* line, int i)
 // Wait for front and back buffers to swap before starting drawing
 void video_sync()
 {
-//   if (!_lines)
-//     return;
-//   spi_ll_usr_is_done(&GPSPI3);
-//   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+  if (!_lines)
+    return;
+  ulTaskNotifyTake(pdTRUE, 0);
 }
 
 // Workhorse ISR handles audio and video updates
