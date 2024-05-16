@@ -1137,7 +1137,12 @@ void video_sync()
 {
   if (!_lines)
     return;
+<<<<<<< HEAD
   ulTaskNotifyTake(pdTRUE, 0);
+=======
+//   spi_ll_usr_is_done(&GPSPI3);
+  ulTaskNotifyTake(pdTRUE, 20);
+>>>>>>> 35107bdb708744b6fa2961290257edbb90d53353
 }
 
 // Workhorse ISR handles audio and video updates
