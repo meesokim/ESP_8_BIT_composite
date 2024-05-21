@@ -29,7 +29,7 @@ Then manually adding 'const' to move it out of precious dynamic memory
 #include "cat_and_galactic_squid.h"
 
 // Create an instance of the graphics library
-ESP_8_BIT_GFX videoOut(false /* = NTSC */, 16 /* = RGB565 colors will be downsampled to 8-bit RGB332 */);
+ESP_8_BIT_GFX videoOut(true /* = NTSC */, 16 /* = RGB565 colors will be downsampled to 8-bit RGB332 */);
 AnimatedGIF gif;
 
 // Vertical margin to compensate for aspect ratio
