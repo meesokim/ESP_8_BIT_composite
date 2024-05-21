@@ -463,13 +463,33 @@ void IRAM_ATTR i2s_intr_handler_video(void *arg)
 #endif
 }
 
+/**
+ * @brief Power up APLL circuit
+ */
+static inline __attribute__((always_inline)) void clk_ll_apll_enable(void)
+{
+    CLEAR_PERI_REG_MASK(RTC_CNTL_ANA_CONF_REG, RTC_CNTL_PLLA_FORCE_PD);
+    SET_PERI_REG_MASK(RTC_CNTL_ANA_CONF_REG, RTC_CNTL_PLLA_FORCE_PU);
+}
+
+// static inline __attribute__((always_inline)) void clk_ll_apll_set_config(uint32_t o_div, uint32_t sdm0, uint32_t sdm1, uint32_t sdm2)
+// {
+//     REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_DSDM2, sdm2);
+//     REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_DSDM0, sdm0);
+//     REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_DSDM1, sdm1);
+//     REGI2C_WRITE(I2C_APLL, I2C_APLL_SDM_STOP, CLK_LL_APLL_SDM_STOP_VAL_1);
+//     REGI2C_WRITE(I2C_APLL, I2C_APLL_SDM_STOP, CLK_LL_APLL_SDM_STOP_VAL_2_REV1);
+//     REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_OR_OUTPUT_DIV, o_div);
+// }
+
 static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
 {
-    rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
-    // rclk.xtal_freq = 20;
-    rclk.cpu_freq_mhz = 240;
-    // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
-    rtc_clk_init(rclk);
+    // rtc_clk_config_t rclk = RTC_CLK_CONFIG_DEFAULT();
+    // // rclk.xtal_freq = 20;
+    // rclk.cpu_freq_mhz = 240;
+    // // rclk.fast_freq = RTC_FAST_FREQ_XTALD4;
+    // rtc_clk_init(rclk);
+    setCpuFrequencyMhz(240);
 
 #ifdef CONFIG_IDF_TARGET_ESP32S2
     uint32_t int_mask = SPI_OUT_EOF_INT_ENA;
@@ -524,7 +544,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // spi_ll_enable_intr(&GPSPI3, (spi_ll_intr_t) (SPI_LL_INTR_TRANS_DONE));
     // dac_ll_digi_set_convert_mode(DAC_CONV_NORMAL);
     dac_ll_rtc_reset(); 
-    adc_ll_digi_controller_clk_div(0, 0, 0);
+    // adc_ll_digi_controller_clk_div(0, 0, 0);
 
     //  Setup up the apll: See ref 3.2.7 Audio PLL
     //  f_xtal = (int)rtc_clk_xtal_freq_get() * 1000000;
@@ -537,29 +557,39 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     //  see calc_freq() for math: (4+a)*10/((2 + b)*2) mhz
     //  up to 20mhz seems to work ok:
     //  rtc_clk_apll_enable(1,0x00,0x00,0x4,0);   // 20mhz for fancy DDS
-
-    rtc_clk_8m_enable(true, true);
+    // rtc_clk_apll_enable(true)
+    clk_ll_apll_enable();
+    if (!_pal_) {
+        switch (samples_per_cc) {
+            case 3:  clk_ll_apll_set_config(0x46,0x97,0x4,2);   break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
+            case 4:  clk_ll_apll_set_config(0xa3,0x4b,4,1);   break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
+        }
+    } else {
+         clk_ll_apll_set_config(0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
+    }
+    // rtc_clk_8m_enable(true, true);
     dac_digi_config_t conf;
     conf.mode = DAC_CONV_NORMAL;
-    conf.interval = 0;
+    conf.interval = 1;
     adc_digi_clk_t adclk;
-    adclk.use_apll = false;
+    adclk.use_apll = true;
     adclk.div_num = 1;
     adclk.div_a = 0;
     adclk.div_b = 1;
     conf.dig_clk = adclk;
-    // spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
-    // spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
-    // spi_dma_ll_set_out_eof_generation(&GPSPI3, 1, true);
-    spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, true);
-    spi_dma_ll_tx_start(&GPSPI3, 1, (lldesc_t *)_dma_desc);
-    // dac_ll_digi_clk_inv(true);
-    // *portOutputRegister(0)=1;
-    // int a = *portInputRegister(0);
     dac_hal_digi_controller_config(&conf);
+
     // dac_ll_digi_set_convert_mode(conf.mode);
     // adc_ll_digi_controller_clk_div(1, 0, 3);
     dac_hal_rtc_sync_by_adc(true);
+    spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
+    spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
+    spi_dma_ll_set_out_eof_generation(&GPSPI3, 1, true);
+    spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, true);
+    spi_dma_ll_tx_start(&GPSPI3, 1, (lldesc_t *)_dma_desc);
+    dac_ll_digi_clk_inv(true);
+    // *portOutputRegister(0)=1;
+    // int a = *portInputRegister(0);
     // dac_ll_digi_set_trigger_interval(0);
     // if (!_pal_) {
     //     switch (samples_per_cc) {
@@ -582,8 +612,8 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     //     // rtc_clk_apll_enable(1,0x043,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
     //     // adc_ll_digi_controller_clk_div(0, 10, 1);
     // }
-    // // dac_hal_digi_enable_dma(true);
-    dac_ll_digi_set_trigger_interval(0);
+    // dac_hal_digi_enable_dma(true);
+    // dac_ll_digi_set_trigger_interval(1);
     // adc_ll_digi_controller_clk_div(1, 0, 1);
     // rtc_clk_apb_freq_update(250000000);
     // APB_SARADC.apb_adc_clkm_conf.clk_en = true;
@@ -615,7 +645,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // spi_ll_dma_tx_enable(&GPSPI3, true);
 
 
-#else
+#elif defined (CONFIG_IDF_TARGET_ESP32)
     periph_module_enable(PERIPH_I2S0_MODULE);
 
     // setup interrupt
@@ -1137,12 +1167,7 @@ void video_sync()
 {
   if (!_lines)
     return;
-<<<<<<< HEAD
   ulTaskNotifyTake(pdTRUE, 0);
-=======
-//   spi_ll_usr_is_done(&GPSPI3);
-  ulTaskNotifyTake(pdTRUE, 20);
->>>>>>> 35107bdb708744b6fa2961290257edbb90d53353
 }
 
 // Workhorse ISR handles audio and video updates

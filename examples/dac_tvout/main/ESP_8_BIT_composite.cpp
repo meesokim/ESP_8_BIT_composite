@@ -22,7 +22,7 @@
 #include "ESP_8_BIT_composite.h"
 #include "math.h"
 #include "esp_check.h"
-
+#include "driver/dac_continuous.h"
 static const char *TAG = "ESP_8_BIT";
 
 static ESP_8_BIT_composite* _instance_ = NULL;
