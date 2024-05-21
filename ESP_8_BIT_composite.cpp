@@ -559,6 +559,8 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     //  rtc_clk_apll_enable(1,0x00,0x00,0x4,0);   // 20mhz for fancy DDS
     // rtc_clk_apll_enable(true)
     clk_ll_apll_enable();
+    // adc_ll_digi_dma_enable();
+    dac_ll_digi_enable_dma(true);
     if (!_pal_) {
         switch (samples_per_cc) {
             case 3:  clk_ll_apll_set_config(0x46,0x97,0x4,2);   break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
