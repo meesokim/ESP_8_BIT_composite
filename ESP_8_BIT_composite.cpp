@@ -559,12 +559,11 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     //  rtc_clk_apll_enable(1,0x00,0x00,0x4,0);   // 20mhz for fancy DDS
     // rtc_clk_apll_enable(true)
     clk_ll_apll_enable();
-    // adc_ll_digi_dma_enable();
-    dac_ll_digi_enable_dma(true);
+    adc_ll_digi_dma_enable();
     if (!_pal_) {
         switch (samples_per_cc) {
             case 3:  clk_ll_apll_set_config(0x46,0x97,0x4,2);   break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
-            case 4:  clk_ll_apll_set_config(0xa3,0x4b,4,1);   break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
+            case 4:  clk_ll_apll_set_config(0x46,0x97,0x4,1);   break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
         }
     } else {
          clk_ll_apll_set_config(0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
@@ -572,7 +571,7 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     // rtc_clk_8m_enable(true, true);
     dac_digi_config_t conf;
     conf.mode = DAC_CONV_NORMAL;
-    conf.interval = 1;
+    conf.interval = 0;
     adc_digi_clk_t adclk;
     adclk.use_apll = true;
     adclk.div_num = 1;
