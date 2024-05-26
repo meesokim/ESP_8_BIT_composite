@@ -562,36 +562,41 @@ static esp_err_t start_dma(int line_width,int samples_per_cc, int ch = 1)
     adc_ll_digi_dma_enable();
     if (!_pal_) {
         switch (samples_per_cc) {
-            case 3:  clk_ll_apll_set_config(0x46,0x97,0x4,2);   break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
-            case 4:  clk_ll_apll_set_config(0x46,0x97,0x4,1);   break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
+            case 3:  rtc_clk_apll_coeff_set(2, 0x46,0x97,0x4);   break;    // 10.7386363636 3x NTSC (10.7386398315mhz)
+            case 4:  rtc_clk_apll_coeff_set(5, 0x46,0x97,0x4);   break;    // 14.3181818182 4x NTSC (14.3181864421mhz)
         }
     } else {
-         clk_ll_apll_set_config(0x04,0xA4,0x6,1);     // 17.734476mhz ~4x PAL
+         rtc_clk_apll_coeff_set(1, 0x04,0xA4,0x6);     // 17.734476mhz ~4x PAL
     }
+    // dac_ll_digi_clk_inv(true);
+    // *portOutputRegister(0)=1;
+    // int a = *portInputRegister(0);
+    // dac_ll_digi_set_trigger_interval(0);
     // rtc_clk_8m_enable(true, true);
-    dac_digi_config_t conf;
-    conf.mode = DAC_CONV_NORMAL;
-    conf.interval = 0;
-    adc_digi_clk_t adclk;
-    adclk.use_apll = true;
-    adclk.div_num = 1;
-    adclk.div_a = 0;
-    adclk.div_b = 1;
-    conf.dig_clk = adclk;
-    dac_hal_digi_controller_config(&conf);
+    // dac_digi_config_t conf;
+    // conf.mode = DAC_CONV_NORMAL;
+    // conf.interval = 0;
+    // adc_digi_clk_t adclk;
+    // // Set ADC digital controller clock division factor. The clock divided from `APLL` or `APB` clock.
+    // // Expression: controller_clk = (APLL or APB) / (div_num + div_a / div_b + 1).
+    // adclk.use_apll = true;
+    // adclk.div_num = 1;
+    // adclk.div_a = 0;
+    // adclk.div_b = 1;
+    // conf.dig_clk = adclk;
+    // dac_hal_digi_controller_config(&conf);
 
+    // s_dac_set_apll_freq(14.3181818182 * 1000000);
+    // dac_dma_periph_init(14.3181818182 * 1000000, true);
     // dac_ll_digi_set_convert_mode(conf.mode);
-    // adc_ll_digi_controller_clk_div(1, 0, 3);
-    dac_hal_rtc_sync_by_adc(true);
+    // adc_ll_digi_controller_clk_div(4, 4, 0);
+    // dac_dma_periph_init()
+    // dac_hal_rtc_sync_by_adc(true);
     spi_dma_ll_tx_enable_burst_data(&GPSPI3, 1, true);
     spi_dma_ll_tx_enable_burst_desc(&GPSPI3, 1, true);
     spi_dma_ll_set_out_eof_generation(&GPSPI3, 1, true);
     spi_dma_ll_enable_out_auto_wrback(&GPSPI3, 1, true);
     spi_dma_ll_tx_start(&GPSPI3, 1, (lldesc_t *)_dma_desc);
-    dac_ll_digi_clk_inv(true);
-    // *portOutputRegister(0)=1;
-    // int a = *portInputRegister(0);
-    // dac_ll_digi_set_trigger_interval(0);
     // if (!_pal_) {
     //     switch (samples_per_cc) {
     //         case 3: 
